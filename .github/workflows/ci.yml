@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: risk
+          POSTGRES_PASSWORD: risk
+          POSTGRES_DB: risk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U risk -d risk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://risk:risk@localhost:5432/risk
+      DJANGO_SECRET_KEY: ci-only
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy .
+      - run: uv run lint-imports
+      - run: uv run pytest

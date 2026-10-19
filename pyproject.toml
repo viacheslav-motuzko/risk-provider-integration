@@ -1,0 +1,157 @@
+[project]
+name = "risk-provider-integration"
+version = "0.1.0"
+description = "WebSocket risk-management provider integration for a Django monolith"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+    "django>=5.2,<5.3",            # E-02
+    "psycopg[binary]>=3.2",        # E-03
+    "dj-database-url>=2.3",
+    "websockets>=14",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "prometheus-client>=0.21",
+    "aiohttp>=3.10",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-django>=4.9",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "django-stubs[compatible-mypy]>=5.1",
+    "import-linter>=2.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["**/migrations/*"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",  # pycodestyle, pyflakes
+    "I",            # isort
+    "UP",           # pyupgrade
+    "B",            # bugbear
+    "SIM", "C4",    # simplifications, comprehensions
+    "DJ",           # flake8-django
+    "ASYNC",        # blocking calls inside async code
+    "PT",           # pytest style
+    "S",            # bandit
+    "T20",          # no print()
+    "RUF",
+]
+ignore = [
+    "RUF012",  # mutable class attributes: Django Meta / model options
+    "DJ008",   # __str__ on every model: noise for stubs
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106"]
+"tests/**" = ["S101", "S105", "S106"]
+"tools/**" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apps", "config", "tools"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["mypy_django_plugin.main"]
+exclude = ["^\\.venv/", "^build/"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings.test"
+
+[[tool.mypy.overrides]]
+module = ["apps.*.migrations.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["apps.*.tests.*", "tests.*"]
+disallow_untyped_defs = false
+disallow_untyped_decorators = false
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+pythonpath = ["."]
+testpaths = ["apps", "tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "e2e: scenario tests that need the docker compose stack",
+]
+
+[tool.importlinter]
+root_packages = ["apps", "django", "pydantic", "websockets", "aiohttp", "asyncio"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "domain is pure"
+type = "forbidden"
+source_modules = ["apps.risk_integration.domain"]
+forbidden_modules = [
+    "django", "pydantic", "websockets", "aiohttp", "asyncio",
+    "apps.risk_integration.protocol",
+    "apps.risk_integration.persistence",
+    "apps.risk_integration.transport",
+    "apps.risk_integration.runtime",
+    "apps.risk_integration.adapters",
+]
+
+[[tool.importlinter.contracts]]
+name = "protocol knows only pydantic and the standard library"
+type = "forbidden"
+source_modules = ["apps.risk_integration.protocol"]
+forbidden_modules = [
+    "django", "websockets", "aiohttp",
+    "apps.risk_integration.persistence",
+    "apps.risk_integration.transport",
+    "apps.risk_integration.runtime",
+    "apps.risk_integration.adapters",
+]
+
+[[tool.importlinter.contracts]]
+name = "async runtime and transport never touch Django or the models"
+type = "forbidden"
+source_modules = [
+    "apps.risk_integration.runtime",
+    "apps.risk_integration.transport",
+]
+forbidden_modules = ["django", "apps.risk_integration.models"]
+# Direct imports only: runtime reaches the ORM through persistence via run_db (design-topics.md).
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "monolith apps reach risk_integration only through its api"
+type = "forbidden"
+source_modules = ["apps.betting", "apps.wallets"]
+forbidden_modules = ["apps.risk_integration"]
+allow_indirect_imports = true
+unmatched_ignore_imports_alerting = "none"  # these imports appear only from stage 3 on
+ignore_imports = [
+    "apps.betting.** -> apps.risk_integration.api",
+    "apps.wallets.** -> apps.risk_integration.api",
+]
+
+[[tool.importlinter.contracts]]
+name = "risk_integration reaches the monolith only through its adapter"
+type = "forbidden"
+source_modules = ["apps.risk_integration"]
+forbidden_modules = ["apps.betting", "apps.wallets"]
+allow_indirect_imports = true
+unmatched_ignore_imports_alerting = "none"  # these imports appear only from stage 3 on
+ignore_imports = [
+    "apps.risk_integration.adapters.monolith -> apps.betting.**",
+    "apps.risk_integration.adapters.monolith -> apps.wallets.**",
+]

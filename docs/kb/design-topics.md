@@ -1,0 +1,45 @@
+# Code-level design topics
+
+Top-level decisions are fixed (`decisions.md`). Code-level patterns are agreed with the user in the stage where they appear. When a stage touches one of these topics, put it in the design note with 2-3 options, trade-offs and a recommendation, then stop for the decision.
+
+## Topics
+
+- Layering and dependency direction; ports and adapters versus plain Django service functions.
+- Where domain logic lives (pure domain module versus models).
+- How much DDD is warranted (aggregate boundaries, value objects, domain errors).
+- Persistence style: purpose-named functions versus repository classes versus managers/querysets and selectors.
+- Transaction boundaries: who owns `atomic`, and how it interacts with `run_db`.
+- The async/sync seam helper and the executor and connection lifecycle.
+- Error taxonomy (transient versus permanent) and retry policy.
+- Configuration, dependency wiring, testing strategy.
+- The two-way coupling between `betting` (enqueues a ticket) and `risk_integration` (applies decisions through the adapter): keep it explicit, one-directional per module, and cheap to cut if the service is extracted.
+- Typed integration settings: `pydantic-settings` with `SecretStr` versus plain parsing.
+- Where the `run_db` helper lives and how persistence functions declare their transaction and timeouts.
+- Shape of the applier queue items (raw frame versus decoded message) and where decode errors are counted.
+
+## Leaning defaults (to confirm or overturn in discussion; not binding)
+
+- Pure domain module with no Django or asyncio imports, enforced by import-linter.
+- Ports only at real seams: monolith (`BetDecisionPort`), provider transport, clock (async timers only; domain code receives `now`), event publisher. No generic repository abstraction over the ORM.
+- Django practices: service functions for use cases, selectors for reads, no signals for business flow, no logic in views.
+- DDD-lite: `RiskTicket` is the aggregate and transitions go only through the state machine; no tactical-DDD ceremony.
+- Manual wiring in one composition root (`runtime/app.py`); no DI framework.
+
+## Decided (filled in stage 0 and later)
+
+One line per topic: the decision, the reason, the date or stage. A topic listed here is not reopened without saying so at a gate.
+
+- Clock source: DB time in SQL for every cross-pod comparison; `now` passed into domain code (D12, review round 1).
+- Leader election: none. The provider's session policy decides how many sessions are active; correctness comes from D3 and A-03. A lease row is the documented upgrade path for kick-out with more than one replica (D6, revised in stage 0).
+- Layering, domain, DDD, wiring: the leaning defaults above are adopted as written (stage 0).
+- Seam between runtime and persistence: `allow_indirect_imports = true` on the runtime/transport contract only, so it forbids direct Django or ORM imports in async modules; Django's `SynchronousOnlyOperation` is the runtime guard. Reason: keeps the planned layout without a port per DB call (stage 0).
+- Persistence style and transaction ownership: purpose-named module functions, no repository classes. `run_db` (in `persistence/db.py`) owns the unit of work: connection hygiene, `atomic`, `SET LOCAL` timeouts; the function runs inside that transaction. Monolith service functions keep their own `atomic`, which becomes a savepoint when called from the integration. Reason: one place for timeouts and transactions, nothing to forget (stage 0).
+- `run_db` admission: a semaphore permit is released when the worker thread finishes, not when the awaiting coroutine times out; otherwise more threads than permits are busy (stage 0).
+- Error taxonomy: CAS miss is a return value; transient errors are not retried inline except up to 2 applier retries within the deadline; `OutcomeUnknown` for a timed-out `run_db`; permanent errors map to a definite outcome; unclassified exceptions fail fast. Known risk and remedy (poison message, per-item isolation) in D4. Reason: simplest behavior that never hides a bug (stage 0).
+- Acks and re-send: no application acks (A-02). Final messages are re-sent after a reconnect within the loss window, by type (D11). A correlated `ERROR` (`ref_type`) may correct a closed state (`ticket-lifecycle.md`). Reason: the task names no reply messages; this closes the realistic loss case with one query (stage 0).
+- Ticket type: one, with one configured deadline stored per ticket as `deadline_at` (A-04). Reason: the task defines no ticket types (stage 0).
+- Typed integration settings: `pydantic-settings` with prefix `RISK_`, no `env_file`, validated when the command starts, so web pods of the monolith need no provider variables (stage 0).
+- Applier queue items: decoded messages; decode errors are counted in the reader (stage 0).
+- `ticket_id`: a UUID we generate, separate from the bet's primary key (stage 0).
+- Testing: pure unit tests for domain and codec (table of allowed and forbidden transitions); persistence on real Postgres, `transaction=True` when threads are involved; one fake provider (`tools/fake_provider`, minimal in stage 4, scripted in stage 6); e2e tests marked `e2e` and outside `make check`; no property-based testing (stage 0).
+- Coupling between `betting` and `risk_integration`: deferred to stage 3, as `PROJECT_STRUCTURE.md` says.

@@ -1,0 +1,37 @@
+# STUB: `db` is real. `app` is a placeholder until stage 5; the fake provider joins in stage 6.
+# Local development only. Credentials below are throwaway defaults for a local container.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-risk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-risk}
+      POSTGRES_DB: ${POSTGRES_DB:-risk}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-risk}:${POSTGRES_PASSWORD:-risk}@db:5432/${POSTGRES_DB:-risk}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-change-me}
+      PROVIDER_WS_URL: ws://fake-provider:8765
+      PROVIDER_WS_TOKEN: ${PROVIDER_WS_TOKEN:-dev-token}
+    ports:
+      - "9100:9100"
+
+  # fake-provider: added in stage 6 (tools/fake_provider)
+
+volumes:
+  pgdata:

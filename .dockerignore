@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+CLAUDE.local.md
+docs/kb/private
+.claude
+.github
+**/__pycache__
+.mypy_cache
+.ruff_cache
+.pytest_cache

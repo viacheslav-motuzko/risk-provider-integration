@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# private agent context
+CLAUDE.local.md
+docs/kb/private/
+
+# local-only prompts
+kickoff/
+
+# IDE
+.idea/
