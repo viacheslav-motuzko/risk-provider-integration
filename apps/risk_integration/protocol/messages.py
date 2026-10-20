@@ -2,10 +2,10 @@
 
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, ClassVar
+from typing import ClassVar
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PlainSerializer
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 class OutboundType(StrEnum):
@@ -40,13 +40,7 @@ class CancellationReason(StrEnum):
     DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"
     APPLY_FAILED = "APPLY_FAILED"
     TICKET_REJECTED = "TICKET_REJECTED"
-    CONFIRM_REJECTED = "CONFIRM_REJECTED"
 
-
-# ASSUMPTION A-16: decimals travel as fixed-point strings; str(Decimal) could produce exponent notation ("1E+2").
-type WireDecimal = Annotated[
-    Decimal, PlainSerializer(lambda value: format(value, "f"), return_type=str, when_used="json")
-]
 
 # ASSUMPTION A-09: the only error code whose meaning changes our reaction; every other code is kept as received.
 UNKNOWN_TICKET_CODE = "UNKNOWN_TICKET"
@@ -60,26 +54,18 @@ class _Outbound(BaseModel):
     ticket_id: UUID
 
 
-class Selection(BaseModel):
-    """ASSUMPTION A-16: one leg of a ticket. Odds are decimal odds; prices and money are never floats."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    event_id: str = Field(min_length=1)
-    market: str = Field(min_length=1)
-    outcome: str = Field(min_length=1)
-    odds: WireDecimal = Field(gt=1, allow_inf_nan=False)
-
-
 class Ticket(_Outbound):
-    """ASSUMPTION A-16: stake in major units of `currency`, a pseudonymous customer reference, no ticket type."""
+    """ASSUMPTION A-16: one single bet. Stake and decimal odds travel as decimal strings; `selection_id` is the
+    provider's outcome id and `customer_ref` a pseudonymous reference, both opaque to us. Business validation
+    belongs to the monolith; this model only keeps money exact."""
 
     message_type = OutboundType.TICKET
 
-    stake: WireDecimal = Field(gt=0, allow_inf_nan=False)
-    currency: str = Field(pattern=r"^[A-Z]{3}$")
-    selections: tuple[Selection, ...] = Field(min_length=1)
-    customer_ref: str = Field(min_length=1)
+    stake: Decimal = Field(allow_inf_nan=False)
+    currency: str
+    odds: Decimal = Field(allow_inf_nan=False)
+    selection_id: str
+    customer_ref: str
 
 
 class ConfirmRecommendation(_Outbound):

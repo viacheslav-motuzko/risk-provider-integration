@@ -27,9 +27,9 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 - **If different**: With acks, final messages would become at-least-once with retransmission until acked. That means new states (`CONFIRM_SENT`, ...) and the re-send window goes away. Without `ref_type`, errors could only be matched to the ticket's current state, and errors about earlier steps would be ignored and counted.
 
 ### A-03. Idempotency
-- **Q**: Is every message idempotent by `ticket_id` and message type? If we send the same `TICKET` twice, do you treat the second as a retransmission and answer with the original recommendation, without evaluating the ticket again? Are duplicate confirms, declines and cancellations no-ops?
-- **Assumed**: Yes to all.
-- **Why it matters**: This is the foundation of our delivery model. `TICKET` is sent at least once: once more at the retransmit point, after every reconnect, and after a crash between send and commit. If a duplicate counted as a second bet, the provider would see double exposure.
+- **Q**: Is every message idempotent by `ticket_id` and message type? If we send the same `TICKET` twice, do you treat the second as a retransmission and answer with the original recommendation, without evaluating the ticket again? Are duplicate confirms, declines and cancellations no-ops, including a duplicate confirm that arrives after your confirm window?
+- **Assumed**: Yes to all. A duplicate confirm for a ticket whose confirm you already took is a no-op even after the confirm window (A-04); it does not draw a "too late" error.
+- **Why it matters**: This is the foundation of our delivery model. `TICKET` is sent at least once: once more at the retransmit point, after every reconnect, and after a crash between send and commit. If a duplicate counted as a second bet, the provider would see double exposure. Final messages are also re-sent after a reconnect (D11), which relies on duplicates being no-ops.
 - **If different**: We would have to record what the provider has already seen, which needs acks (A-02), and fall back to sending `TICKET` at most once. A crash or disconnect would then lose every bet in flight (D2, "considered and rejected").
 
 ### A-09. When a cancellation is valid
@@ -40,7 +40,7 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 
 ### A-10. A rejected or late confirm
 - **Q**: What happens when our `CONFIRM_RECOMMENDATION` arrives after your confirmation window, or is refused for another reason? Is the ticket then treated as not accepted on your side?
-- **Assumed**: An `ERROR` with `ref_type = CONFIRM_RECOMMENDATION` (for example `TOO_LATE`). The provider treats the ticket as not accepted. Our reaction (void the bet and cancel) is a business decision: B-01.
+- **Assumed**: An `ERROR` with `ref_type = CONFIRM_RECOMMENDATION` (for example `TOO_LATE`). The provider treats the ticket as not accepted. Our reaction is a business decision (B-01): the ticket goes to `ESCALATED`, and the bet is not voided automatically.
 - **Why it matters**: By that point we have already accepted the bet and captured the stake. If the provider does not count the bet, our exposure and theirs differ.
 - **If different**: If a late confirm is still accepted, the reaction for this error becomes "log and count" and B-01 no longer applies.
 
@@ -55,8 +55,8 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 ### A-04. Response times and windows
 - **Q**: How quickly do you usually answer a ticket, and what is the maximum? Does it differ by ticket type, sport, live versus pre-match, or stake? How long after your recommendation do you accept our confirm or decline?
 - **Assumed**: One ticket type, because the task defines none. The recommendation usually arrives within about 2 s and at most within about 5 s. Our deadline is one configured value (default 10 s), stored per ticket as `deadline_at` when the ticket is created. The retransmit point is half the deadline. A confirm or decline is accepted within 10 s after the recommendation.
-- **Why it matters**: The deadline is how long a customer waits before the bet is rejected (B-02). The confirm window decides whether re-sending a confirm after a reconnect is safe (D11).
-- **If different**: Per-type timing means `deadline_at` is computed from the type when the ticket is created. The column already exists per ticket, so only the computation changes. A shorter confirm window shrinks the re-send window for confirms.
+- **Why it matters**: The deadline is how long a customer waits before the bet is rejected (B-02). The confirm window decides whether a confirm lost in a disconnect is still recovered by the re-send after the reconnect (D11); a re-send that comes too late ends in `ESCALATED` (B-01).
+- **If different**: Per-type timing means `deadline_at` is computed from the type when the ticket is created. The column already exists per ticket, so only the computation changes. A shorter confirm window means more lost confirms end in `ESCALATED` instead of being recovered.
 
 ## 3. Provider: sessions and connectivity
 
@@ -64,7 +64,7 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 - **Q**: How many concurrent WebSocket sessions may one account hold? If a second connects while the first is open, do you refuse the new one or close the old one? How is that signalled? How long do you keep a session whose client died without closing it?
 - **Assumed**: One active session per account. A second connection is refused (reject-new), with a distinguishable status or close code (A-17). A dead session is dropped after missed pings, in about 30 s.
 - **Why it matters**: It decides how a rolling update hands over the session, and whether more than one replica can run. Correctness does not depend on it: claims, compare-and-swap transitions and A-03 make parallel instances safe (D3, D6).
-- **If different**: If the newer connection displaces the old one (kick-out), one replica still works: the new pod displaces the terminating old one. More than one replica would make pods displace each other in a loop. In that case we would add the documented leader lease row (ADR-004). If several sessions are allowed, every instance is active, which is safe under A-15.
+- **If different**: If the newer connection displaces the old one (kick-out), one replica still works: the new pod displaces the terminating old one. More than one replica would make pods displace each other in a loop. In that case we would add the documented leader lease row (D6). If several sessions are allowed, every instance is active, which is safe under A-15.
 
 ### A-06. Liveness
 - **Q**: Do you use WebSocket ping/pong, an application-level heartbeat, or both? What interval and timeout?
@@ -109,18 +109,18 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 - **If different**: The envelope is one model in `protocol/envelope.py`. A different auth scheme only changes the token provider in the transport (stage 4). We decode tolerantly: unknown fields are ignored, a missing `ts` is accepted (D12: the provider's time never decides anything), binary frames are counted and dropped.
 
 ### A-16. The `TICKET` payload (new in stage 1)
-- **Q**: Which fields does `TICKET` require? How are stake, currency and odds encoded? Do you need the customer's identity or only a stable reference? How do you identify events, markets and outcomes: your IDs or ours? Do `DECLINE_RECOMMENDATION` and `REQUEST_CANCELLATION` take a reason?
+- **Q**: Which fields does `TICKET` require? How are stake, currency and odds encoded? Do you need the customer's identity or only a stable reference? How do you identify the outcome bet on: your IDs or ours? Do `DECLINE_RECOMMENDATION` and `REQUEST_CANCELLATION` take a reason?
 - **Assumed**:
-  - `TICKET.payload = {stake, currency, selections: [{event_id, market, outcome, odds}], customer_ref}`.
+  - One single bet per ticket: `TICKET.payload = {stake, currency, odds, selection_id, customer_ref}`.
   - `stake` is in major currency units and `currency` is ISO 4217.
-  - `stake` and `odds` are decimal strings in fixed-point notation (never JSON numbers, never exponents); `odds` are decimal odds above 1.
+  - `stake` and `odds` (decimal odds) are decimal strings, never JSON numbers.
+  - `selection_id` is the provider's outcome ID from its feed, already known to the monolith.
   - `customer_ref` is a pseudonymous stable reference, not personal data.
-  - Event, market and outcome IDs are the provider's feed IDs, already known to the monolith.
   - There is no ticket type.
   - `DECLINE_RECOMMENDATION` takes an optional `reason`: `INSUFFICIENT_FUNDS`, `LIMIT_EXCEEDED`, `BET_NOT_PLACEABLE` or `OTHER` (A-08).
-  - `REQUEST_CANCELLATION` takes a `reason`: `DEADLINE_EXCEEDED`, `APPLY_FAILED`, `TICKET_REJECTED` or `CONFIRM_REJECTED`.
-- **Why it matters**: Money must not pass through floats. Personal data should not leave our system without need. A reason on cancellations helps the provider and our risk team reconcile.
-- **If different**: Only `Ticket`, `Selection` and the reason enums in `protocol/messages.py` change. Whether a ticket can carry more than one selection is a business question (B-05), not a wire-format one: the format already carries a list.
+  - `REQUEST_CANCELLATION` takes a `reason`: `DEADLINE_EXCEEDED`, `APPLY_FAILED` or `TICKET_REJECTED`. A refused confirm is not cancelled (B-01).
+- **Why it matters**: Money must not pass through floats. Personal data should not leave our system without need. A reason on cancellations helps the provider and our risk team reconcile. Nothing in our flow reads the payload back: delivery, retransmission and the state machine key on `ticket_id` only, so the payload is deliberately minimal.
+- **If different**: Only `Ticket` and the reason enums in `protocol/messages.py` change. Multiples (accumulators) would turn `odds` and `selection_id` into a list of legs; the integration flow does not change.
 
 ### A-08. Declining after an accept recommendation
 - **Q**: May we decline a ticket you recommended to accept (for example insufficient balance or our own limits)? Do you want a reason?
@@ -142,8 +142,8 @@ These are not provider facts. They decide what happens to a customer's bet or mo
 
 ### B-01. A confirm was refused or late after we accepted the bet
 - **Q**: The provider refused or did not take our confirm (A-10) after we had already accepted the bet and captured the stake. Do we void a bet the customer may already have seen as accepted, or keep it with exposure the provider does not count?
-- **Default**: Void and refund, notify the customer, raise a metric and an alert.
-- **If different**: Keeping the bet changes the reaction to that error into "escalate for review". It does not need a cancellation.
+- **Default**: Keep the bet. The ticket goes to `ESCALATED` with the provider's error code; risk operations get a metric and an alert and resolve it manually. No automatic void or refund: the customer may already have seen the bet as accepted, and an exposure mismatch that people resolve does less harm than reversing an accepted bet on an ambiguous signal.
+- **If different**: Voiding needs a compensation path from an accepted state (refunding a captured stake, which the wallet stub does not have), a new cancellation reason, and a customer notification.
 
 ### B-02. What the customer sees while waiting, and at the deadline
 - **Q**: How is a bet shown while the provider has not answered? What happens at the deadline? Is the deadline value (A-04) acceptable?
@@ -159,8 +159,3 @@ These are not provider facts. They decide what happens to a customer's bet or mo
 - **Q**: How long are ticket rows kept? Do regulatory retention rules for bet records apply to them?
 - **Default**: Kept as long as the bet records. Archiving or partitioning is a next step.
 - **If different**: Partition by creation month. The partial indexes on non-terminal states keep the hot queries fast in any case.
-
-### B-05. Single bets only, or also multiples (new in stage 1)
-- **Q**: Is this flow for single bets only, or also accumulators and system bets? Do they go through the same risk check and deadline?
-- **Default**: Singles only in this scope: one selection per bet in the monolith stub. The wire format already carries a list of selections (A-16).
-- **If different**: The monolith's bet model gains selections. The integration flow and the state machine do not change.

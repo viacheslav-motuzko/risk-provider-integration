@@ -8,7 +8,7 @@ paths:
 # Persistence
 
 - This package and `models.py` are the only places in `risk_integration` that use the ORM.
-- Claim work with `select_for_update(skip_locked=True)` inside a short `atomic` block, write the lease (`locked_by`, `locked_until`), commit, and only then do network I/O.
+- Claim work with `select_for_update(skip_locked=True)` inside a short `atomic` block, write the lease (`locked_by`, `locked_until`), commit, and only then do network I/O. An expired lease is claimable by the claim query itself (no requeue step); every transition clears the lease (D3).
 - Every state change is a conditional update on the expected state (and lease owner where relevant) and returns whether it applied. Callers must handle "did not apply" as a normal outcome (duplicate, late, lost lease).
 - A transaction that applies a recommendation includes the monolith effects and the ticket transition together, through the port; it either all commits or none of it does.
 - Time comparisons that matter across pods (ticket leases, deadlines) are done in SQL against DB time (D12).

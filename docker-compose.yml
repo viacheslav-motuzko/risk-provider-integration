@@ -1,4 +1,4 @@
-# STUB: `db` is real. `app` is a placeholder until stage 5; the fake provider joins in stage 6.
+# STUB: `db` is real. `app` is a placeholder until stage 5; the fake provider joins in stage 5.
 # Local development only. Credentials below are throwaway defaults for a local container.
 services:
   db:
@@ -31,7 +31,7 @@ services:
     ports:
       - "9100:9100"
 
-  # fake-provider: added in stage 6 (tools/fake_provider)
+  # fake-provider: added in stage 5 (tools/fake_provider)
 
 volumes:
   pgdata:

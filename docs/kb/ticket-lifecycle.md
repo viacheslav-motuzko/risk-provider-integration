@@ -1,35 +1,54 @@
-# Ticket lifecycle (draft; refine in stage 2)
+# Ticket lifecycle
+
+Revised at the stage 1 gate: B-01 escalates instead of voiding, apply failures have three classes, replies may beat the relay's own commit, final messages are re-sent uniformly (D11). Stage 2 implements the transition table in `domain/machine.py`; field names may still be refined there.
 
 ```
 PENDING_SEND -> SENT -> CONFIRM_PENDING -> CONFIRMED
                      -> DECLINE_PENDING -> DECLINED
-any non-terminal state -> CANCEL_PENDING -> CANCELLED
-cancellation rejected / exhausted retries / needs a human -> ESCALATED
+PENDING_SEND | SENT -> CANCEL_PENDING -> CANCELLED          our placement failed: compensate first (D7)
+CONFIRM_PENDING | CONFIRMED -> ESCALATED                    provider refused or missed our confirm (B-01)
+CANCEL_PENDING | CANCELLED -> ESCALATED                     provider refused our cancellation (B-03)
 ```
 
-- `PENDING_SEND` is created by the monolith in the same transaction as the bet, with `deadline_at` from the bet type (D11). The relay claims it (lease), sends `TICKET`, then sets `SENT`. A crash between the send and the state update causes a re-send, which relies on A-03.
-- Retransmission (D11): a `SENT` ticket without a recommendation gets one more `TICKET` at its retransmit point, and every `SENT` ticket gets one after each (re)connect (A-07).
-- On a recommendation, one transaction applies the monolith effects (bet status, wallet) and moves `SENT` to `CONFIRM_PENDING` or `DECLINE_PENDING` with a compare-and-swap on the expected state. After commit the relay sends `CONFIRM_RECOMMENDATION` or `DECLINE_RECOMMENDATION` and moves to the terminal state.
-- An `ACCEPT` recommendation can still end in `DECLINE_PENDING` when our own business rules reject the bet (A-08). A permanent error while applying it (a domain rule, not a transient DB error) also goes straight to `DECLINE_PENDING` with a reason; it does not wait for the deadline.
-- A transient DB failure while applying a recommendation: bounded retries within the deadline; otherwise the ticket stays `SENT` and the sweeper cancels it at the deadline. A timed-out or ambiguous apply is "outcome unknown" (D5): the next pass re-reads the ticket before doing anything.
-- The sweeper moves tickets still `PENDING_SEND` or `SENT` after `deadline_at` to `CANCEL_PENDING`, with compensation in the same transaction (D7). A recommendation arriving afterwards is ignored and counted.
-- A crash between apply and send is recovered by the relay finding `*_PENDING` rows.
-- Final messages have no ack (A-02): after a successful send the ticket moves to its closed state (`CONFIRMED`, `DECLINED`, `CANCELLED`) and records `last_sent_at`. After a reconnect, the relay re-sends final messages sent within the loss window (D11).
-- An `ERROR` is correlated by `ticket_id` and `ref_type` (A-02) and may correct a closed state. Each row is a compare-and-swap:
+Compensation means: void the bet and release the held stake, in the same transaction as the transition. It happens only from the pre-acceptance states (`PENDING_SEND`, `SENT`), where the stake is held and never captured. No path refunds a captured stake.
 
-  | Ticket state | `ERROR` about | Result |
-  |---|---|---|
-  | `SENT` | TICKET | compensate, `CANCEL_PENDING` |
-  | `CONFIRMED` | CONFIRM (late or rejected) | compensate, `CANCEL_PENDING` (A-10, B-01) |
-  | `DECLINED` | DECLINE | log and count only; the provider treats the ticket as not accepted (A-07) |
-  | `CANCELLED` | CANCEL, rejected | `ESCALATED` (A-09, B-03) |
-  | `CANCELLED` | CANCEL, unknown ticket | no-op, counts as done (A-09) |
+## Transition table
 
-  Any other combination is ignored, logged and counted.
-- Persisted for restart and reconciliation: `recommendation` (ACCEPT or DECLINE as received), `last_error_code`, `last_error_ref_type`, `escalation_reason`, `last_sent_at`.
-- Undecodable frames and messages for unknown tickets are counted and logged; they never crash the reader.
-- Retries on outbound sends use `attempts` and `next_attempt_at` with backoff; beyond a limit the ticket goes to `ESCALATED` and raises a metric and an alert-worthy log.
-- Expired leases (a crashed worker) are returned to claimable by the sweeper; transitions still go through compare-and-swap, so a late original owner cannot overwrite a newer state.
-- Indexes: partial indexes on the non-terminal states serve the claim, retransmit and sweep queries, so the table can grow without slowing them. Retention: B-04.
+Every transition is a conditional update on the listed source states (plus the lease owner for the relay's send transitions), runs in one transaction together with its side effects, and clears the lease. A miss is a normal outcome: logged and counted, never an exception.
 
-Refine in stage 2: the exact transition table, which fields are written on each transition (`retransmit_at`, `attempts`, `next_attempt_at`, `escalation_reason`), and the index definitions.
+A reply can arrive before the relay has committed the transition for the frame it just sent (the relay sends, then commits). So every reply-driven transition also accepts the state before that send: `PENDING_SEND` for replies to `TICKET`, `CONFIRM_PENDING` for replies to a confirm, `CANCEL_PENDING` for replies to a cancellation. The relay's own commit then misses, which is a normal outcome. Without this, a fast reply would be dropped as unexpected and, for a refused confirm, the exposure mismatch would go unnoticed.
+
+| # | From | Trigger | To | Same transaction |
+|---|------|---------|----|------------------|
+| 1 | (new) | `place_bet` in the monolith | `PENDING_SEND` | bet `PENDING_RISK`, stake held, ticket payload snapshot, `deadline_at` (D11) |
+| 2 | `PENDING_SEND` | relay sent `TICKET` | `SENT` | `last_sent_at`, `retransmit_at`. A crash before this commit causes a re-send (A-03) |
+| 3 | `SENT` | relay re-sent `TICKET` at `retransmit_at`, or after a (re)connect | `SENT` | `last_sent_at`; `retransmit_at` cleared (one retransmit point per ticket; every reconnect re-sends all `SENT`, A-07) |
+| 4 | `PENDING_SEND`, `SENT` | `RECOMMENDATION` ACCEPT, applied | `CONFIRM_PENDING` | bet accepted, stake captured, `recommendation` |
+| 5 | `PENDING_SEND`, `SENT` | `RECOMMENDATION` DECLINE, applied | `DECLINE_PENDING` | bet rejected, stake released, `recommendation` |
+| 6 | `PENDING_SEND`, `SENT` | ACCEPT, but our domain rules reject the bet (limits, A-08) | `DECLINE_PENDING` | bet rejected, stake released, `recommendation`, `decline_reason` |
+| 7 | `PENDING_SEND`, `SENT` | transient failure or unknown outcome while applying (DB error, timeout, `OutcomeUnknown`) | unchanged | nothing (rolled back, or not known). No inline retry (D4): the retransmit (#3) brings the recommendation back (A-03), otherwise the deadline (#9) cancels. An unclassified exception fails the task (D4) and leaves the ticket unchanged as well |
+| 8 | `PENDING_SEND`, `SENT` | recognized permanent technical failure while applying (the task's "unexpected effects") | `CANCEL_PENDING` | compensate, `cancel_reason = APPLY_FAILED`. A separate transaction after the failed one rolled back |
+| 9 | `PENDING_SEND`, `SENT` | `deadline_at` passed (sweeper, DB time) | `CANCEL_PENDING` | compensate, `cancel_reason = DEADLINE_EXCEEDED`. `PENDING_SEND` too: it may have reached the provider before a crash (A-09) |
+| 10 | `PENDING_SEND`, `SENT` | `ERROR` with `ref_type = TICKET` | `CANCEL_PENDING` | compensate, `cancel_reason = TICKET_REJECTED`, `last_error_code`, `last_error_ref_type` |
+| 11 | `CONFIRM_PENDING` | relay sent confirm | `CONFIRMED` | `last_sent_at` |
+| 12 | `DECLINE_PENDING` | relay sent decline | `DECLINED` | `last_sent_at` |
+| 13 | `CANCEL_PENDING` | relay sent cancellation | `CANCELLED` | `last_sent_at` |
+| 14 | `CONFIRM_PENDING`, `CONFIRMED` | `ERROR` with `ref_type = CONFIRM_RECOMMENDATION` (refused or late, A-10) | `ESCALATED` | `last_error_*`, `escalation_reason = CONFIRM_REJECTED`. The bet stays accepted: no void, no refund (B-01) |
+| 15 | `CANCEL_PENDING`, `CANCELLED` | `ERROR` with `ref_type = REQUEST_CANCELLATION`, code other than `UNKNOWN_TICKET` | `ESCALATED` | `last_error_*`, `escalation_reason = CANCEL_REJECTED` (A-09, B-03) |
+
+Ignored, logged and counted (no transition):
+- A `RECOMMENDATION` in any state other than `PENDING_SEND` or `SENT`: a duplicate, or late after the deadline or a cancellation (D11).
+- An `ERROR` about a decline in `DECLINE_PENDING` or `DECLINED`: the provider treats the ticket as not accepted anyway (A-07).
+- An `ERROR` about a cancellation with code `UNKNOWN_TICKET`: the cancellation counts as done (A-09).
+- Any other combination, an `ERROR` without `ticket_id`, and messages for unknown tickets.
+
+The sweeper never touches `CONFIRM_PENDING` or `DECLINE_PENDING`: the decision is applied locally, and only its delivery is pending. A `*_PENDING` row that cannot be sent (no session) stays pending; the age of the oldest one is a metric with an alert. There is no attempt counter.
+
+## Relay, leases and re-send
+
+- The relay is the only sender. It claims `PENDING_SEND`, `SENT` rows whose `retransmit_at` has passed, and `*_PENDING` rows with `SELECT ... FOR UPDATE SKIP LOCKED` and a lease, commits, sends, then applies #2, #3 or #11-13. An expired lease is claimable by the same query; there is no separate requeue step (D3).
+- After each (re)connect: re-send `TICKET` for every `SENT` ticket (#3), and re-send the final message of every `CONFIRMED`, `DECLINED` or `CANCELLED` ticket whose `last_sent_at` lies within the loss window before the disconnect, whatever its type (D11). A re-send does not change the state; the cancellation reason comes from the row, not from memory.
+
+## Persisted fields
+
+Beyond state and the bet reference: `deadline_at`, `retransmit_at`, `last_sent_at`, `locked_by`, `locked_until`, the ticket payload snapshot, `recommendation` (ACCEPT or DECLINE as received), `decline_reason`, `cancel_reason`, `last_error_code`, `last_error_ref_type`, `escalation_reason`. Partial indexes on the non-terminal states serve the claim, retransmit and deadline queries, so the table can grow without slowing them; the re-send query uses an index on `last_sent_at` for closed states. Retention: B-04.

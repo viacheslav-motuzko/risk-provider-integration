@@ -2,7 +2,7 @@
 
 Planned layout. The user creates the scaffold (Django project, app packages, dependencies, tooling, agent context files) BEFORE the first Claude Code session; Claude Code fills the modules stage by stage (`docs/kb/stages.md`). If the scaffold differs from this file, the repository wins; flag the difference.
 
-Legend: `[scaffold]` created by the user up front; `[S1]`..`[S7]` filled in that stage; CORE implemented properly; STUB thin and honestly marked; OPS operability; PRIVATE gitignored.
+Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that stage; CORE implemented properly; STUB thin and honestly marked; OPS operability; PRIVATE gitignored.
 
 ## Layout
 
@@ -18,10 +18,10 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S7]` filled in that
 ├── .python-version, uv.lock               [scaffold] Python 3.12; lock committed
 ├── .dockerignore                          [scaffold]
 ├── .github/workflows/ci.yml               [scaffold] ruff, mypy, import contracts, pytest with Postgres
-├── README.md                              [S7]
+├── README.md                              [S6]
 ├── pyproject.toml                         [scaffold] deps, ruff, type checker, pytest, import-linter
 ├── Makefile                               [scaffold] test / lint / migrate / up
-├── docker-compose.yml                     [scaffold: postgres] [S6: + app, fake provider]
+├── docker-compose.yml                     [scaffold: postgres] [S5: + app, fake provider]
 ├── Dockerfile                             [S5] OPS, same image as the monolith
 ├── manage.py                              [scaffold]
 │
@@ -33,20 +33,19 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S7]` filled in that
 │   ├── betting/                           STUB: monolith side
 │   │   ├── models.py                      [S3] Bet (PENDING_RISK, ACCEPTED, REJECTED, VOIDED)
 │   │   ├── services.py                    [S3] place_bet, accept_bet, reject_bet, void_bet
-│   │   ├── events.py                      [S3] EventPublisher port + logging implementation
 │   │   └── management/commands/
 │   │       └── place_demo_bet.py          [S3] demo / load generator
 │   │
 │   ├── wallets/                           STUB: monolith side
-│   │   ├── models.py                      [S3] Wallet, WalletTransaction (HOLD / CAPTURE / RELEASE)
+│   │   ├── models.py                      [S3] Wallet, WalletHold (one per bet: HELD / CAPTURED / RELEASED)
 │   │   └── services.py                    [S3] hold, capture, release (idempotent per bet)
 │   │
 │   └── risk_integration/                  CORE
-│       ├── models.py                      [S2] RiskTicket (state, deadline_at, retransmit_at, locked_by, locked_until,
-│       │                                  attempts, ...)
+│       ├── models.py                      [S2] RiskTicket (state, deadline_at, retransmit_at, last_sent_at, locked_by,
+│       │                                  locked_until, reasons, last error, ...)
 │       ├── migrations/                    [S2]
 │       ├── api.py                         [S3] the ONLY entry point the monolith uses: enqueue_ticket(...)
-│       ├── ports.py                       [S3] BetDecisionPort (accept / decline / void), Clock
+│       ├── ports.py                       [S3] BetDecisionPort (accept / decline / void)
 │       ├── domain/                        [S2] pure: stdlib only
 │       │   ├── states.py, machine.py, errors.py
 │       ├── protocol/                      [S1] stdlib + pydantic only
@@ -57,7 +56,7 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S7]` filled in that
 │       │   └── close_codes.py             AUTH_FAILED / DISPLACED / ALREADY_CONNECTED / PLANNED / TRANSIENT
 │       ├── persistence/                   [S2] the only ORM users besides models.py
 │       │   ├── tickets.py                 create_in_tx, claim_batch (SKIP LOCKED + lease), transition (CAS),
-│       │   │                              due_for_retransmit, find_expired, requeue_expired_leases
+│       │   │                              due_for_retransmit, find_expired, finals_in_loss_window
 │       │   └── db.py                      run_db(): semaphore, context copy, SET LOCAL timeouts, hygiene
 │       ├── adapters/monolith.py           [S3] DjangoBetDecisionAdapter -> betting / wallets services
 │       ├── transport/ws_client.py         [S4] connect, token provider (static stub), keepalive, close classification
@@ -67,22 +66,20 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S7]` filled in that
 │       │   ├── supervisor.py              TaskGroup, fail-fast, shutdown orchestration
 │       │   ├── relay.py                   outbox sender (the only sender on the socket), retransmission
 │       │   ├── inbound.py                 reader -> bounded queue -> N appliers; one DB transaction per message, CAS
-│       │   ├── sweeper.py                 deadlines -> compensation + CANCEL_PENDING; expired leases
+│       │   ├── sweeper.py                 deadlines -> compensation + CANCEL_PENDING
 │       │   ├── health.py                  [S5] OPS startup / liveness / readiness
 │       │   └── metrics.py                 [S5] OPS prometheus metrics
 │       ├── management/commands/run_risk_provider.py   [S4] thin: build app, run supervisor
 │       └── tests/                         unit (domain, protocol), integration (persistence on Postgres),
 │                                          runtime (against the fake provider)
 │
-├── tools/fake_provider/                   [S4 minimal, S6 scripted] NOT production code: server.py, scenarios.py, __main__.py
-├── tests/e2e/                             [S6] scenario tests across processes / compose
-├── deploy/k8s/                            [S5] OPS: deployment.yaml (replicas 1, probes, resources, grace period, rollout),
-│                                          optional pdb.yaml, servicemonitor.yaml
+├── tools/fake_provider/                   [S4] NOT production code, in-process from pytest: server.py, scenarios.py, __main__.py
+├── deploy/k8s/                            [S5] OPS: deployment.yaml only (replicas 1, probes, resources, grace period, rollout)
 │
 └── docs/
     ├── PROJECT_STRUCTURE.md               this file
     ├── PROVIDER_QUESTIONS.md              [S1] questions to the provider (A-xx) and the business (B-xx), assumed answers
-    ├── adr/                               ADR-001..007, each written in the stage where the decision lands
+    ├── DECISIONS.md                       [S6] promoted from kb/decisions.md (no separate ADR files)
     └── kb/                                agent knowledge base, read on demand (index in CLAUDE.md)
         ├── stages.md, decisions.md, provider-assumptions.md, ticket-lifecycle.md,
         │   design-topics.md, gotchas.md

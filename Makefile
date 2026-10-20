@@ -48,7 +48,7 @@ migrate:  ## Apply migrations
 run:  ## Run the integration process locally
 	$(UV) run python manage.py run_risk_provider
 
-up:  ## Full stack in containers (stub until stage 6)
+up:  ## Full stack in containers (stub until stage 5)
 	docker compose --profile app up --build
 
 down:  ## Stop and remove the containers

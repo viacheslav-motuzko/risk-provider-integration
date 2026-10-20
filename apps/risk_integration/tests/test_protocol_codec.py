@@ -17,7 +17,6 @@ from apps.risk_integration.protocol.messages import (
     ProviderError,
     Recommendation,
     RequestCancellation,
-    Selection,
     Ticket,
 )
 
@@ -30,7 +29,8 @@ def _ticket(**overrides: object) -> Ticket:
         "ticket_id": TICKET_ID,
         "stake": Decimal("10.50"),
         "currency": "EUR",
-        "selections": (Selection(event_id="ev-1", market="1x2", outcome="home", odds=Decimal("1.85")),),
+        "odds": Decimal("1.85"),
+        "selection_id": "sel-1",
         "customer_ref": "c-7f3a",
     }
     fields.update(overrides)
@@ -60,16 +60,11 @@ def test_ticket_frame_has_envelope_and_exact_money_as_strings():
         "payload": {
             "stake": "10.50",
             "currency": "EUR",
-            "selections": [{"event_id": "ev-1", "market": "1x2", "outcome": "home", "odds": "1.85"}],
+            "odds": "1.85",
+            "selection_id": "sel-1",
             "customer_ref": "c-7f3a",
         },
     }
-
-
-def test_decimals_are_sent_in_fixed_point_never_exponent_notation():
-    payload = json.loads(encode(_ticket(stake=Decimal("1E+2")), ts=TS))["payload"]
-
-    assert payload["stake"] == "100"
 
 
 def test_decimals_round_trip_without_loss():
@@ -118,26 +113,15 @@ def test_encode_refuses_a_naive_timestamp():
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"stake": Decimal(0)},
-        {"stake": Decimal(-1)},
         {"stake": Decimal("NaN")},
         {"stake": Decimal("Infinity")},
-        {"currency": "eur"},
-        {"currency": "EURO"},
-        {"selections": ()},
-        {"customer_ref": ""},
+        {"odds": Decimal("NaN")},
         {"unexpected": "field"},
     ],
 )
-def test_invalid_ticket_cannot_be_built(overrides):
+def test_ticket_refuses_non_finite_money_and_unknown_fields(overrides):
     with pytest.raises(ValidationError):
         _ticket(**overrides)
-
-
-@pytest.mark.parametrize("odds", [Decimal(1), Decimal("0.5"), Decimal("NaN")])
-def test_selection_odds_must_be_finite_decimal_odds_above_one(odds):
-    with pytest.raises(ValidationError):
-        Selection(event_id="e", market="m", outcome="o", odds=odds)
 
 
 def test_outbound_messages_are_immutable():
