@@ -2,7 +2,7 @@
 
 The task description leaves the provider side open and the provider cannot be asked live. For each row write the question to the provider (as a message to a real counterpart) and keep the assumed answer. IDs are referenced from code comments (`# ASSUMPTION A-07`).
 
-Expand each row in stage 1 to: question text, assumed answer, why it matters, what changes in the code if the answer differs. Group them by impact. The central gap: the task lists the four messages the provider receives, and says nothing about the message that carries its recommendation, nor about acks, errors, auth or heartbeats.
+Expanded in stage 1 into `docs/PROVIDER_QUESTIONS.md` (question text, assumed answer, why it matters, what changes if the answer differs, grouped by impact). This table stays the short index. The central gap: the task lists the four messages the provider receives, and says nothing about the message that carries its recommendation, nor about acks, errors, auth or heartbeats.
 
 ## Provider assumptions (A-xx)
 
@@ -23,6 +23,8 @@ Expand each row in stage 1 to: question text, assumed answer, why it matters, wh
 | A-13 | Ordering | At most one `RECOMMENDATION` per ticket transmission; no ordering across tickets; duplicates are possible |
 | A-14 | Connection lifetime | The provider closes a connection after a maximum lifetime (a few hours) with a distinguishable close code. We reconnect at once with a fresh token; this is routine, not a failure |
 | A-15 | Message scope | Messages are scoped to the account, not the session: CONFIRM, DECLINE and CANCELLATION for a ticket are accepted on any session of the account. A recommendation goes to the session that sent the latest TICKET for that ticket; if that session is gone, it is lost, and our retransmission recovers it (A-03, D11) |
+| A-16 | `TICKET` payload (stage 1) | `{stake, currency, selections: [{event_id, market, outcome, odds}], customer_ref}`; stake and odds as fixed-point decimal strings, stake in major units, ISO 4217 currency, pseudonymous customer reference, provider feed IDs, no ticket type. `DECLINE_RECOMMENDATION.reason?` and `REQUEST_CANCELLATION.reason` from small enums |
+| A-17 | Session outcome signals (stage 1) | Upgrade refused with 401/403 (auth) or 409 (already connected). Close codes after the handshake: 4000 planned (A-14), 4001 auth, 4002 displaced, 4003 already connected; everything else transient. The token is checked only at the handshake |
 
 When a stage needs a new assumption, add a row with the next ID here and in `docs/PROVIDER_QUESTIONS.md`, and mention it in the stage summary.
 
@@ -36,6 +38,7 @@ Some gaps are not provider questions: they decide what happens to a customer's b
 | B-02 | What does the customer see while a ticket waits for the provider, and what happens at the deadline? Is the deadline value acceptable? | The bet is shown as pending; at the deadline it is rejected and the stake released ("please try again"). Deadline as in A-04 |
 | B-03 | The provider rejected our cancellation of a bet we voided. Who reconciles the provider's exposure, and how? | `ESCALATED`, alert to risk operations, manual reconciliation |
 | B-04 | How long are ticket rows kept? Do regulatory retention rules for bet records apply to them? | Kept as long as the bet records; archiving or partitioning is a next step |
+| B-05 | Single bets only, or also multiples (accumulators, system bets)? (stage 1) | Singles only in this scope; the wire format carries a list of selections, so multiples change only the monolith's bet model |
 
 ## Environment assumptions (E-xx)
 
