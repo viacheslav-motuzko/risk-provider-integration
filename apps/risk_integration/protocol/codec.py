@@ -31,7 +31,7 @@ class FrameErrorKind(StrEnum):
 
 
 class FrameError(Exception):
-    """An inbound frame that cannot be turned into a message. Permanent: the frame is counted and dropped (D4).
+    """An inbound frame that cannot be turned into a message. Permanent: the frame is counted and dropped.
 
     `message_type` and `ticket_id` are filled in when the envelope could be read, for the log line.
     """
@@ -65,7 +65,7 @@ def encode(message: OutboundMessage, *, ts: datetime) -> str:
 def decode(frame: str | bytes) -> InboundMessage:
     """Parse an inbound frame. Raises `FrameError` and nothing else."""
     if isinstance(frame, bytes):
-        raise FrameError(FrameErrorKind.BINARY, f"{len(frame)} bytes")  # ASSUMPTION A-11: text frames only
+        raise FrameError(FrameErrorKind.BINARY, f"{len(frame)} bytes")  # ASSUMPTION: text frames only
     try:
         raw = json.loads(frame)
     except json.JSONDecodeError as exc:

@@ -163,7 +163,7 @@ def test_envelope_ticket_id_wins_over_one_inside_the_payload():
 
 
 def test_missing_provider_ts_does_not_reject_a_recommendation():
-    # D12: the provider's ts never decides anything, so its absence must not cost us the recommendation.
+    # The provider's ts never decides anything, so its absence must not cost us the recommendation.
     frame = json.dumps({"type": "RECOMMENDATION", "ticket_id": str(TICKET_ID), "payload": {"decision": "ACCEPT"}})
 
     message = decode(frame)

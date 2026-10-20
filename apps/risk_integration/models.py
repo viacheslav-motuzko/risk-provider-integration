@@ -27,14 +27,14 @@ def _in(states: Iterable[State]) -> list[str]:
 
 
 class RiskTicket(models.Model):
-    """One bet submitted to the provider; the outbox row for every message about it (D2)."""
+    """One bet submitted to the provider; the outbox row for every message about it."""
 
     ticket_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     # No foreign key: the integration stays cheap to cut from the monolith app.
     bet_id = models.BigIntegerField(unique=True)
     state = models.CharField(max_length=16, choices=_choices(State), default=State.PENDING_SEND.value)
 
-    # ASSUMPTION A-16: the TICKET payload, snapshotted at creation so a retransmission sends identical content.
+    # The TICKET payload, snapshotted at creation so a retransmission sends identical content.
     stake = models.DecimalField(max_digits=18, decimal_places=2)
     currency = models.CharField(max_length=3)
     odds = models.DecimalField(max_digits=12, decimal_places=4)
@@ -50,16 +50,16 @@ class RiskTicket(models.Model):
     locked_until = models.DateTimeField(null=True)
 
     recommendation = models.CharField(max_length=8, choices=_choices(Decision), default="")
-    decline_reason = models.CharField(max_length=32, default="")  # ASSUMPTION A-08: sent with our decline
+    decline_reason = models.CharField(max_length=32, default="")  # sent with our decline
     cancel_reason = models.CharField(max_length=32, choices=_choices(CancelReason), default="")
-    last_error_code = models.TextField(default="")  # raw provider code (A-02)
+    last_error_code = models.TextField(default="")  # raw provider code
     last_error_ref_type = models.CharField(max_length=32, choices=_choices(MessageRef), default="")
     escalation_reason = models.CharField(max_length=32, choices=_choices(EscalationReason), default="")
 
     class Meta:
         constraints = [
             models.CheckConstraint(condition=models.Q(state__in=_in(State)), name="risk_ticket_state_valid"),
-            # A cancellation re-sent after a reconnect must carry its reason from the row (D11).
+            # A cancellation re-sent after a reconnect must carry its reason from the row.
             models.CheckConstraint(
                 condition=~models.Q(state__in=_in([State.CANCEL_PENDING, State.CANCELLED]))
                 | ~models.Q(cancel_reason=""),

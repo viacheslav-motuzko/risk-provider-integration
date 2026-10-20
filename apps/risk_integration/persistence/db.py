@@ -1,4 +1,4 @@
-"""The async/sync seam: every unit of ORM work runs through `DbRunner` (D5)."""
+"""The async/sync seam: every unit of ORM work runs through `DbRunner`, never on the event loop."""
 
 import asyncio
 import contextvars
@@ -11,7 +11,7 @@ from django.db import close_old_connections, connection, transaction
 
 
 class OutcomeUnknown(Exception):
-    """The caller stopped waiting, but the unit of work may still commit (D5). Re-read state before acting."""
+    """The caller stopped waiting, but the unit of work may still commit. Re-read state before acting."""
 
 
 class DbRunner:

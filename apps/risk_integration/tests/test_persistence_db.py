@@ -54,7 +54,7 @@ class TestRunDb:
             run_db.shutdown()
 
     async def test_timeouts_end_with_the_transaction(self):
-        # SET LOCAL, not SET: behind a transaction pooler a session setting would leak to other clients (E-06).
+        # SET LOCAL, not SET: behind a transaction pooler a session setting would leak to other clients.
         run_db = runner()
 
         def statement_timeout_after_commit():

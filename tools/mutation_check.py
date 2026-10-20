@@ -16,6 +16,10 @@ TICKETS = "apps/risk_integration/persistence/tickets.py"
 DB = "apps/risk_integration/persistence/db.py"
 MACHINE = "apps/risk_integration/domain/machine.py"
 ERRORS = "apps/risk_integration/persistence/errors.py"
+ADAPTER = "apps/risk_integration/adapters/monolith.py"
+SERVICES = "apps/risk_integration/services.py"
+BETTING = "apps/betting/services.py"
+WALLETS = "apps/wallets/services.py"
 
 TIMEOUT_S = 120
 
@@ -165,6 +169,75 @@ MUTATIONS = (
         "OperationalError is not transient",
         ERRORS,
         (("OutcomeUnknown | OperationalError | InterfaceError", "OutcomeUnknown | InterfaceError"),),
+    ),
+    Mutation(
+        "apply-without-lock",
+        "deciding does not lock the ticket",
+        TICKETS,
+        (("RiskTicket.objects.select_for_update().filter(due)", "RiskTicket.objects.filter(due)"),),
+    ),
+    Mutation(
+        "compensate-before-deadline",
+        "the deadline cancellation compensates a ticket that is not due",
+        TICKETS,
+        (("        due &= Q(deadline_at__lte=Now())\n", "        pass\n"),),
+    ),
+    Mutation(
+        "ticket-outside-bet-tx",
+        "place_bet creates the ticket after the bet's transaction",
+        BETTING,
+        (
+            (
+                "        ticket_id = enqueue_ticket(bet_id=bet.pk, snapshot=snapshot)\n",
+                "    ticket_id = enqueue_ticket(bet_id=bet.pk, snapshot=snapshot)\n",
+            ),
+        ),
+    ),
+    Mutation(
+        "rejection-keeps-stake",
+        "a domain rejection does not release the stake",
+        BETTING,
+        (("            wallets.release(bet_id)\n            return Rejection", "            return Rejection"),),
+    ),
+    Mutation(
+        "void-accepted-bet",
+        "compensation voids an accepted bet",
+        BETTING,
+        (("if state not in (BetState.VOIDED, BetState.REJECTED):", "if state is None:"),),
+    ),
+    Mutation(
+        "release-any-hold",
+        "release is not conditional on HELD (double credit, refund of a captured stake)",
+        WALLETS,
+        (
+            (
+                "filter(bet_id=bet_id, state=HoldState.HELD).update(state=HoldState.RELEASED)",
+                "filter(bet_id=bet_id).update(state=HoldState.RELEASED)",
+            ),
+        ),
+    ),
+    Mutation(
+        "capture-any-hold",
+        "capture is not conditional on HELD (captures a released stake)",
+        WALLETS,
+        (
+            (
+                "filter(bet_id=bet_id, state=HoldState.HELD).update(state=HoldState.CAPTURED)",
+                "filter(bet_id=bet_id).update(state=HoldState.CAPTURED)",
+            ),
+        ),
+    ),
+    Mutation(
+        "locked-miss-silent",
+        "a transition that misses under the decision lock is not raised (effect commits without its transition)",
+        SERVICES,
+        (("    if not applied:\n", "    if False:\n"),),
+    ),
+    Mutation(
+        "adapter-untranslated",
+        "the adapter does not turn a broken monolith invariant into PermanentApplyError",
+        ADAPTER,
+        (("    except (betting.BetStateError, HoldStateError) as exc:", "    except PermanentApplyError as exc:"),),
     ),
 )
 

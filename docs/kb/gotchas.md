@@ -4,6 +4,7 @@ Seed list from the design discussion and the independent review; verified agains
 
 ## Python and asyncio
 - `ThreadPoolExecutor` has an unbounded work queue: `max_workers` limits concurrency, not admission. Bound admission with a semaphore.
+- Release that semaphore permit when the worker thread finishes, not when the awaiting coroutine times out: the thread keeps running after the timeout, so releasing early lets more threads than permits run.
 - `loop.run_in_executor` does not copy context variables into the worker (`asyncio.to_thread` does). Copy them in `run_db`, or the log context is lost.
 - Cancelling or timing out an awaited executor call does not stop the thread. The work, including a commit, can still complete afterwards.
 - In a `TaskGroup`, a task that fails cancels its siblings; a task that returns normally cancels nothing. Treat a returning loop as a failure.
@@ -14,12 +15,15 @@ Seed list from the design discussion and the independent review; verified agains
 - Connections are per thread and are not closed or health-checked outside the request cycle. `close_old_connections()` closes every initialized connection of the calling thread that is obsolete or broken; with `CONN_MAX_AGE=0` that means all of them. Never keep anything session-scoped on a connection.
 - `transaction.atomic` does not work across an async boundary. Keep each transaction inside one sync function executed by `run_db`.
 - Django raises `SynchronousOnlyOperation` when the ORM is used on a running event loop. Treat it as a guardrail; do not bypass it with `DJANGO_ALLOW_ASYNC_UNSAFE`.
+- A `StrEnum` member used as a model default or inside the `Q` of an index or constraint is written into the migration as `State['X']`, which ties migrations to the enum: pass `.value`. Django `TextChoices` are serialized by value.
+- `ExpressionWrapper` is generic only in django-stubs: quote the annotation, or it fails at import.
+- `manage.py` needs `DJANGO_SECRET_KEY` and `DATABASE_URL`. Without a `.env`, run management commands with `DJANGO_SETTINGS_MODULE=config.settings.test`.
 - pytest-django wraps a `django_db` test in one transaction on one connection. `run_db` works in other threads with other connections, which cannot see that uncommitted data. Tests that exercise `run_db`, threads or several processes must use `django_db(transaction=True)` (slower: tables are flushed afterwards). Keep pure unit tests off the database.
 
 ## Postgres
 - `SELECT ... FOR UPDATE SKIP LOCKED` needs a transaction (`atomic`) and does not exist on SQLite. Claim in a short transaction, write the lease, commit, then do I/O. The row lock ends at commit; after that only the lease condition and CAS protect the row.
 - With `ORDER BY` at READ COMMITTED, `SKIP LOCKED` can return rows out of order. Do not rely on FIFO.
-- `now()` is the transaction start time, not the statement time. Fine for short transactions; use `clock_timestamp()` if a long one ever matters.
+- Django's `Now()` on PostgreSQL is `statement_timestamp()`: it advances inside a transaction, also inside pytest-django's per-test transaction. Raw SQL `now()` is the transaction start. Use one clock: `Now()` in queries, `statement_timestamp()` in raw SQL.
 - Behind a transaction-mode pooler, session state does not survive between transactions: no advisory locks, no `LISTEN/NOTIFY`, no session `SET`. Set timeouts with `SET LOCAL` inside the transaction; startup options in the connection string may be rejected by the pooler.
 - A connection that died uncleanly is noticed by the server only on its next socket activity or through TCP keepalive (about two hours by default on Linux). Anything that must expire after a crash (ticket leases) keeps its own TTL in a column instead of relying on the connection.
 
@@ -40,7 +44,12 @@ Seed list from the design discussion and the independent review; verified agains
 - Never label metrics with `ticket_id` or `bet_id`; the cardinality grows without bound.
 - During a rolling update two pods overlap. Correctness must not depend on the overlap being absent (invariant 3).
 
+## Tests
+- A test loop that ends on a DB condition must be bounded, or a bug turns it into a spin that ends at some real deadline.
+- A test that claims a lock serializes two units of work must observe the second one waiting (`pg_stat_activity.wait_event_type = 'Lock'`, in a bounded loop). Starting both at a barrier passes most runs without the lock.
+
 ## Tooling
+- The edit hook runs `ruff check --fix`, which deletes an import that is not used yet. Add an import in the same edit as its first use.
 - `uv.lock` is committed. Run `make lock` once at the start to take the newest compatible versions, then freeze; Docker and CI use `uv sync --frozen`.
 - `lint-imports` fails if a package named in a contract does not exist, so the scaffold creates every subpackage. It squashes external packages to their root (`django`, not `django.db`).
 - `pydantic-settings` pulls in `python-dotenv`. Do not configure `env_file` on settings classes (D10).

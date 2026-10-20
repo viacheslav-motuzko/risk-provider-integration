@@ -16,6 +16,8 @@ Compensation means: void the bet and release the held stake, in the same transac
 
 Every transition is a conditional update on the listed source states (plus the lease owner for the relay's send transitions), runs in one transaction together with its side effects, and clears the lease. A miss is a normal outcome: logged and counted, never an exception.
 
+Rows 4-6 and 8-10 move money. Their unit of work locks the ticket in its source states first (which also yields `bet_id`), lets the monolith decide and apply through the port, then commits the transition (`services.py`, stage 3). A duplicate or a racing cancellation waits for the lock and then finds nothing to do.
+
 A reply can arrive before the relay has committed the transition for the frame it just sent (the relay sends, then commits). So every reply-driven transition also accepts the state before that send: `PENDING_SEND` for replies to `TICKET`, `CONFIRM_PENDING` for replies to a confirm, `CANCEL_PENDING` for replies to a cancellation. The relay's own commit then misses, which is a normal outcome. Without this, a fast reply would be dropped as unexpected and, for a refused confirm, the exposure mismatch would go unnoticed.
 
 | # | From | Trigger | To | Same transaction |
@@ -37,7 +39,7 @@ A reply can arrive before the relay has committed the transition for the frame i
 | 15 | `CANCEL_PENDING`, `CANCELLED` | `ERROR` with `ref_type = REQUEST_CANCELLATION`, code other than `UNKNOWN_TICKET` | `ESCALATED` | `last_error_*`, `escalation_reason = CANCEL_REJECTED` (A-09, B-03) |
 
 Ignored, logged and counted (no transition):
-- A `RECOMMENDATION` in any state other than `PENDING_SEND` or `SENT`: a duplicate, or late after the deadline or a cancellation (D11).
+- A `RECOMMENDATION` in any state other than `PENDING_SEND` or `SENT`: a duplicate, or late after the deadline cancellation or another cancellation (D11). Between the deadline and the sweeper's pass the ticket is still `SENT` and the recommendation is applied.
 - An `ERROR` about a decline in `DECLINE_PENDING` or `DECLINED`: the provider treats the ticket as not accepted anyway (A-07).
 - An `ERROR` about a cancellation with code `UNKNOWN_TICKET`: the cancellation counts as done (A-09).
 - Any other combination, an `ERROR` without `ticket_id`, and messages for unknown tickets.

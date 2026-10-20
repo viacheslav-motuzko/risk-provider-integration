@@ -46,5 +46,5 @@ def test_session_conflict_is_recognised_both_at_upgrade_and_as_close_code():
 
 
 def test_kick_out_is_distinct_from_reject_new():
-    # D6: displaced means another session won (long backoff); already-connected means we lost (short backoff).
+    # Displaced means another session won (long backoff); already-connected means we lost (short backoff).
     assert classify_close(4002) is not classify_close(4003)

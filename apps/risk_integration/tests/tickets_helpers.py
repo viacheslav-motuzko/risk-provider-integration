@@ -24,7 +24,7 @@ def new_ticket(deadline: timedelta = DEADLINE) -> UUID:
 
 
 def ago(seconds: float) -> Any:
-    """A DB-time expression `seconds` in the past (negative: in the future). Tests move time this way (D12)."""
+    """A DB-time expression `seconds` in the past (negative: in the future). Tests move time this way, on DB time."""
     return Now() - timedelta(seconds=seconds)
 
 

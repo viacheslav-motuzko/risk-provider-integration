@@ -4,7 +4,7 @@ unit of work of its own.
 
 Transitions are conditional updates built from `domain.machine.RULES`; each clears the lease and returns whether
 it applied. A miss (duplicate, late reply, lost lease) is a normal outcome for the caller to log and count.
-Monolith side effects (stage 3) run in the same transaction after a transition that applied.
+Monolith side effects run in the same transaction, under the lock taken by `lock_awaiting` (`services.py`).
 """
 
 from dataclasses import dataclass
@@ -32,6 +32,7 @@ from apps.risk_integration.domain.states import (
     OUTBOX,
     CancelReason,
     Decision,
+    DeclineReason,
     State,
 )
 from apps.risk_integration.models import RiskTicket
@@ -39,8 +40,6 @@ from apps.risk_integration.models import RiskTicket
 
 @dataclass(frozen=True)
 class TicketSnapshot:
-    """ASSUMPTION A-16: the single-bet TICKET payload, built by the monolith when the bet is placed."""
-
     stake: Decimal
     currency: str
     odds: Decimal
@@ -50,8 +49,6 @@ class TicketSnapshot:
 
 @dataclass(frozen=True)
 class ClaimedTicket:
-    """A row the relay holds a lease on, with everything needed to build the message owed in `state`."""
-
     ticket_id: UUID
     bet_id: int
     state: State
@@ -61,7 +58,7 @@ class ClaimedTicket:
 
 
 def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta) -> UUID:
-    """Row 1. Must run in the transaction that creates the bet, so neither exists without the other (D2)."""
+    """Must run in the transaction that creates the bet, so neither exists without the other"""
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("create_ticket must run inside the transaction that creates the bet")
     ticket = RiskTicket.objects.create(
@@ -71,20 +68,20 @@ def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta)
         odds=snapshot.odds,
         selection_id=snapshot.selection_id,
         customer_ref=snapshot.customer_ref,
-        deadline_at=_db_now_plus(deadline),  # D11: the budget counts from creation
+        deadline_at=_db_now_plus(deadline),  # the customer waits from creation, so the budget counts from it
     )
     return ticket.ticket_id
 
 
 def claim_due(*, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
-    """The relay's normal pass: every message owed (OUTBOX) and SENT tickets at their retransmit point (D11)."""
+    """The relay's normal pass: every message owed (OUTBOX) and SENT tickets at their retransmit point"""
     owed = Q(state__in=OUTBOX - {State.PENDING_SEND}) | _before_deadline(State.PENDING_SEND)
     retransmit = _before_deadline(State.SENT) & Q(retransmit_at__lte=Now())
     return _claim(owed | retransmit, owner=owner, lease=lease, limit=limit)
 
 
 def claim_sent_for_resend(*, owner: str, lease: timedelta, limit: int, since: datetime) -> list[ClaimedTicket]:
-    """After a (re)connect at DB time `since`: SENT tickets not yet re-sent on this session (A-07, row 3).
+    """After a (re)connect at DB time `since`: SENT tickets not yet re-sent on this session.
     A re-send moves `last_sent_at` past `since`, so calling this until it returns nothing pages through all."""
     return _claim(_before_deadline(State.SENT) & Q(last_sent_at__lt=since), owner=owner, lease=lease, limit=limit)
 
@@ -93,14 +90,26 @@ def claim_finals_for_resend(
     *, owner: str, lease: timedelta, limit: int, window_start: datetime, since: datetime
 ) -> list[ClaimedTicket]:
     """After a (re)connect at DB time `since`: final messages sent in `[window_start, since)`, whatever their
-    type (D11). Pages like `claim_sent_for_resend`."""
+    type. Pages like `claim_sent_for_resend`."""
     due = Q(state__in=CLOSED_FINAL, last_sent_at__gte=window_start, last_sent_at__lt=since)
     return _claim(due, owner=owner, lease=lease, limit=limit)
 
 
+def lock_awaiting(ticket_id: UUID, *, past_deadline: bool = False) -> int | None:
+    """lock a ticket that still waits for its recommendation and return its bet, or None if it
+    has moved on (duplicate, late) or, with `past_deadline`, is not yet due. The lock serializes appliers and the
+    sweeper on this ticket until commit, so the monolith decides once."""
+    due = Q(ticket_id=ticket_id, state__in=AWAITING_RECOMMENDATION)
+    if past_deadline:
+        due &= Q(deadline_at__lte=Now())
+    bet_id: int | None = RiskTicket.objects.select_for_update().filter(due).values_list("bet_id", flat=True).first()
+    return bet_id
+
+
 def record_send(ticket_id: UUID, sent_from: State, *, owner: str, retransmit_after: timedelta) -> bool:
-    """Rows 2, 3, 11-13 and the final re-send: the relay sent the message owed in `sent_from` and still holds
-    the lease. A crash before this commit makes the relay send again (A-03)."""
+    """The relay sent the message owed in `sent_from` and still holds
+    the lease. A crash before this commit makes the relay send again; the provider
+    deduplicates by `ticket_id`."""
     trigger = send_trigger(sent_from)
     values: dict[str, Any] = {"last_sent_at": Now()}
     if trigger is Trigger.TICKET_SENT:
@@ -111,24 +120,24 @@ def record_send(ticket_id: UUID, sent_from: State, *, owner: str, retransmit_aft
 
 
 def record_accept(ticket_id: UUID) -> bool:
-    """Row 4. The caller captures the stake in the same transaction when this returns True."""
+    """The caller captures the stake in the same transaction when this returns True."""
     return _transition(ticket_id, Trigger.ACCEPT_APPLIED, recommendation=Decision.ACCEPT)
 
 
 def record_decline(ticket_id: UUID) -> bool:
-    """Row 5. The caller rejects the bet and releases the stake in the same transaction when this returns True."""
+    """The caller rejects the bet and releases the stake in the same transaction when this returns True."""
     return _transition(ticket_id, Trigger.DECLINE_APPLIED, recommendation=Decision.DECLINE)
 
 
-def record_domain_rejection(ticket_id: UUID, *, decline_reason: str) -> bool:
-    """Row 6: ACCEPT, but our own rules reject the bet (A-08); we decline with `decline_reason`."""
+def record_domain_rejection(ticket_id: UUID, *, decline_reason: DeclineReason) -> bool:
+    """ACCEPT, but our own rules reject the bet; we decline with `decline_reason`."""
     return _transition(
         ticket_id, Trigger.DOMAIN_REJECTED, recommendation=Decision.ACCEPT, decline_reason=decline_reason
     )
 
 
 def cancel(ticket_id: UUID, trigger: Trigger, *, error_code: str = "") -> bool:
-    """Rows 8-10. The caller compensates in the same transaction when this returns True (D7)."""
+    """Our placement failed. The caller compensates in the same transaction when this returns True."""
     values: dict[str, Any] = {"cancel_reason": CANCEL_REASONS[trigger]}
     if trigger in ERROR_REFS:
         values.update(last_error_code=error_code, last_error_ref_type=ERROR_REFS[trigger])
@@ -137,7 +146,8 @@ def cancel(ticket_id: UUID, trigger: Trigger, *, error_code: str = "") -> bool:
 
 
 def escalate(ticket_id: UUID, trigger: Trigger, *, error_code: str) -> bool:
-    """Rows 14-15: the provider refused our confirm (B-01) or cancellation (B-03). No money moves."""
+    """The provider refused our confirm or cancellation. No money moves: the bet stays as it is and risk
+    operations resolve the mismatch."""
     return _transition(
         ticket_id,
         trigger,
@@ -148,13 +158,13 @@ def escalate(ticket_id: UUID, trigger: Trigger, *, error_code: str) -> bool:
 
 
 def find_expired(*, limit: int) -> list[UUID]:
-    """Tickets still waiting for a recommendation at their deadline (row 9), for the sweeper."""
+    """Tickets still waiting for a recommendation at their deadline, for the sweeper."""
     due = Q(state__in=AWAITING_RECOMMENDATION, deadline_at__lte=Now())
     return list(RiskTicket.objects.filter(due).order_by("deadline_at").values_list("ticket_id", flat=True)[:limit])
 
 
 def db_now() -> datetime:
-    """DB time, for anchors the runtime keeps between units of work (the connect time of a session, D12)."""
+    """DB time, for anchors the runtime keeps between units of work (the connect time of a session)."""
     with connection.cursor() as cursor:
         cursor.execute("SELECT statement_timestamp()")  # the clock of Django's Now() on PostgreSQL
         (value,) = cursor.fetchone()
@@ -163,7 +173,7 @@ def db_now() -> datetime:
 
 
 def _claim(due: Q, *, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
-    # D3: no FIFO guarantee with SKIP LOCKED; the order is best-effort.
+    # No FIFO guarantee with SKIP LOCKED; the order is best-effort and nothing depends on it.
     rows = list(
         RiskTicket.objects.select_for_update(skip_locked=True).filter(due, _lease_free()).order_by("created_at")[:limit]
     )

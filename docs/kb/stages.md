@@ -1,6 +1,6 @@
 # Stages and gates
 
-Each stage runs in its own session (`/stage N`, see `.claude/commands/stage.md`); the handoff between sessions is `docs/kb/progress.md`. Each stage: read the listed files, post a design note, stop on a real choice, implement with tests, post the summary, stop at the gate with the whole stage uncommitted; the user reviews the full diff, then the stage is committed by the proposed plan (protocol in `CLAUDE.md`). Submitted as early as possible. If time runs short, cut breadth, never the tests of core invariants.
+Each stage runs in its own session (`/stage N`, see `.claude/commands/stage.md`); the handoff between sessions is `docs/kb/progress.md`. Each stage: read the listed files, post a design note, stop on a real choice, implement with tests, post the summary, stop at the gate with the whole stage uncommitted; the user reviews the full diff, then the stage is committed as one commit (protocol in `CLAUDE.md`). Submitted as early as possible. If time runs short, cut breadth, never the tests of core invariants.
 
 Revised at the stage 1 gate: the former stage 6 (fake provider and failures) is folded into stage 4, so operability is stage 5 and docs stage 6. Scope cuts are recorded in `decisions.md` (D1, D2, D3, D4, D7, D8, D11).
 
@@ -20,5 +20,5 @@ Decision records: `docs/kb/decisions.md` (D1-D12) is the single record. There ar
 
 - All invariants in `CLAUDE.md` hold and are covered by tests, including the stage 4 scenarios.
 - `docker compose up` brings up Postgres, the app and the fake provider; a demo command places bets and the flow is visible in logs and metrics.
-- Every assumption and business question has an ID, appears in `docs/PROVIDER_QUESTIONS.md`, and is referenced from the code where it matters.
+- Every assumption and business question has an ID and appears in `docs/PROVIDER_QUESTIONS.md`; where it matters, the code states it in words (`# ASSUMPTION:` for provider guesses), without the ID.
 - The README lets a reviewer understand the architecture, run it, and see what was deliberately left out, in under ten minutes.

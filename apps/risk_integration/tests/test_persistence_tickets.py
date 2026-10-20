@@ -8,7 +8,14 @@ from django.core.management import call_command
 from django.db import IntegrityError, transaction
 
 from apps.risk_integration.domain.machine import Trigger
-from apps.risk_integration.domain.states import CancelReason, Decision, EscalationReason, MessageRef, State
+from apps.risk_integration.domain.states import (
+    CancelReason,
+    Decision,
+    DeclineReason,
+    EscalationReason,
+    MessageRef,
+    State,
+)
 from apps.risk_integration.models import RiskTicket
 from apps.risk_integration.persistence import tickets
 from apps.risk_integration.tests.tickets_helpers import DEADLINE, LEASE, ago, force, new_ticket, row, state
@@ -107,7 +114,7 @@ def test_ticket_is_retransmitted_once_at_its_retransmit_point():
     [
         tickets.record_accept,
         tickets.record_decline,
-        lambda tid: tickets.record_domain_rejection(tid, decline_reason="LIMIT_EXCEEDED"),
+        lambda tid: tickets.record_domain_rejection(tid, decline_reason=DeclineReason.LIMIT_EXCEEDED),
         lambda tid: tickets.cancel(tid, Trigger.APPLY_FAILED),
         lambda tid: tickets.cancel(tid, Trigger.TICKET_REFUSED, error_code="BAD"),
     ],
@@ -212,7 +219,7 @@ def test_claimed_cancellation_carries_its_reason_and_the_providers_error_from_th
 
 def test_claimed_domain_rejection_carries_its_decline_reason():
     tid = new_ticket()
-    tickets.record_domain_rejection(tid, decline_reason="LIMIT_EXCEEDED")
+    tickets.record_domain_rejection(tid, decline_reason=DeclineReason.LIMIT_EXCEEDED)
     [claim] = tickets.claim_due(owner=A, lease=LEASE, limit=100)
     assert (claim.state, claim.decline_reason) == (State.DECLINE_PENDING, "LIMIT_EXCEEDED")
 

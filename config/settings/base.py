@@ -1,8 +1,9 @@
 import os
+from datetime import timedelta
 
 import dj_database_url
 
-# D10: configuration comes from environment variables only; a missing required variable fails at import.
+# Configuration comes from environment variables only; a missing required variable fails at import.
 SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 ALLOWED_HOSTS: list[str] = []
@@ -49,6 +50,10 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {"default": dj_database_url.parse(os.environ["DATABASE_URL"], conn_max_age=0)}
+
+# The ticket deadline. A Django setting, not an integration setting, because the monolith's web
+# pods create tickets (`risk_integration.api.enqueue_ticket`).
+RISK_TICKET_DEADLINE = timedelta(seconds=float(os.environ.get("RISK_TICKET_DEADLINE_SECONDS", "10")))
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

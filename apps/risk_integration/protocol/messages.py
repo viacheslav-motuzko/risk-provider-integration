@@ -16,8 +16,8 @@ class OutboundType(StrEnum):
 
 
 class InboundType(StrEnum):
-    RECOMMENDATION = "RECOMMENDATION"  # ASSUMPTION A-01
-    ERROR = "ERROR"  # ASSUMPTION A-02
+    RECOMMENDATION = "RECOMMENDATION"  # ASSUMPTION: the task does not name it
+    ERROR = "ERROR"  # ASSUMPTION: the task names no error reply
 
 
 class Decision(StrEnum):
@@ -26,7 +26,7 @@ class Decision(StrEnum):
 
 
 class DeclineReason(StrEnum):
-    """ASSUMPTION A-08: why we decline, including after an ACCEPT recommendation."""
+    """ASSUMPTION: why we decline, including after an ACCEPT recommendation."""
 
     INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
     LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
@@ -35,14 +35,14 @@ class DeclineReason(StrEnum):
 
 
 class CancellationReason(StrEnum):
-    """ASSUMPTION A-16: why our placement flow failed (D7)."""
+    """ASSUMPTION: why our placement flow failed."""
 
     DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"
     APPLY_FAILED = "APPLY_FAILED"
     TICKET_REJECTED = "TICKET_REJECTED"
 
 
-# ASSUMPTION A-09: the only error code whose meaning changes our reaction; every other code is kept as received.
+# ASSUMPTION: the only error code whose meaning changes our reaction; every other code is kept as received.
 UNKNOWN_TICKET_CODE = "UNKNOWN_TICKET"
 
 
@@ -55,7 +55,7 @@ class _Outbound(BaseModel):
 
 
 class Ticket(_Outbound):
-    """ASSUMPTION A-16: one single bet. Stake and decimal odds travel as decimal strings; `selection_id` is the
+    """ASSUMPTION: one single bet. Stake and decimal odds travel as decimal strings; `selection_id` is the
     provider's outcome id and `customer_ref` a pseudonymous reference, both opaque to us. Business validation
     belongs to the monolith; this model only keeps money exact."""
 
@@ -102,7 +102,7 @@ class Recommendation(_Inbound):
 
 
 class ProviderError(_Inbound):
-    """ASSUMPTION A-02: `ref_type` names which of our messages is rejected, so the error can be correlated
+    """ASSUMPTION: `ref_type` names which of our messages is rejected, so the error can be correlated
     after the ticket has moved on. `code` is kept raw for logs and the ticket row."""
 
     message_type = InboundType.ERROR

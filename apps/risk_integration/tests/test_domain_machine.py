@@ -49,7 +49,7 @@ def test_transition_table_matches_the_lifecycle_spec(trigger, state):
 
 
 def test_money_moving_transitions_leave_only_pre_acceptance_states():
-    # D7: compensation and decline release a held stake, which exists only before acceptance.
+    # Compensation and decline release a held stake, which exists only before acceptance.
     for rule in RULES.values():
         if rule.target in {S.CANCEL_PENDING, S.DECLINE_PENDING}:
             assert rule.sources <= AWAITING_RECOMMENDATION

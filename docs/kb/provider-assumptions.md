@@ -1,6 +1,6 @@
 # Declared assumptions and open questions (seed for `docs/PROVIDER_QUESTIONS.md`)
 
-The task description leaves the provider side open and the provider cannot be asked live. For each row write the question to the provider (as a message to a real counterpart) and keep the assumed answer. IDs are referenced from code comments (`# ASSUMPTION A-07`).
+The task description leaves the provider side open and the provider cannot be asked live. For each row write the question to the provider (as a message to a real counterpart) and keep the assumed answer. Code states an assumption in words where it matters (`# ASSUMPTION: ...`), never by ID.
 
 Expanded in stage 1 into `docs/PROVIDER_QUESTIONS.md` (question text, assumed answer, why it matters, what changes if the answer differs, grouped by impact). This table stays the short index. The central gap: the task lists the four messages the provider receives, and says nothing about the message that carries its recommendation, nor about acks, errors, auth or heartbeats.
 
@@ -30,7 +30,7 @@ When a stage needs a new assumption, add a row with the next ID here and in `doc
 
 ## Questions to the business (B-xx)
 
-Some gaps are not provider questions: they decide what happens to a customer's bet or money, and the product owner or the risk/trading team decides them. Each row is a question with the default we implement. They go into `docs/PROVIDER_QUESTIONS.md` as a separate section and are referenced from code as `# QUESTION B-01`.
+Some gaps are not provider questions: they decide what happens to a customer's bet or money, and the product owner or the risk/trading team decides them. Each row is a question with the default we implement. They go into `docs/PROVIDER_QUESTIONS.md` as a separate section.
 
 | ID | Question | Default we implement |
 |----|----------|----------------------|
@@ -41,7 +41,7 @@ Some gaps are not provider questions: they decide what happens to a customer's b
 
 ## Environment assumptions (E-xx)
 
-Nothing is known about the real monolith or the platform it runs on, so these are declared too. They are listed in the README next to the provider assumptions and referenced from code as `# ASSUMPTION E-xx`. No question to a counterpart is needed; each row says what changes if the assumption is wrong.
+Nothing is known about the real monolith or the platform it runs on, so these are declared too. They are listed in the README next to the provider assumptions. No question to a counterpart is needed; each row says what changes if the assumption is wrong.
 
 | ID | Topic | Assumption and consequence if wrong |
 |----|-------|--------------------------------------|
@@ -53,6 +53,6 @@ Nothing is known about the real monolith or the platform it runs on, so these ar
 | E-06 | Pooling | Connections may pass through a transaction-mode pooler. Nothing session-level is used: no advisory locks, no `LISTEN/NOTIFY`, no session `SET` (only `SET LOCAL`) |
 | E-07 | Platform | Kubernetes with Prometheus-style scraping; secrets delivered as env vars from a Secret (D10) |
 | E-08 | Time | UTC with `USE_TZ=True`. Cross-pod time comparisons use DB time (D12), so pod clock skew does not affect correctness |
-| E-09 | Monolith operations | The monolith exposes, or can be given, idempotent per-bet operations: hold/capture/release for wallets and accept/reject/void for bets. Here they are stubs behind `BetDecisionPort` |
+| E-09 | Monolith operations | The monolith exposes, or can be given, idempotent per-bet operations: hold/capture/release for wallets and accept/reject/void for bets. They are local database operations with no network calls, because they run inside the integration's transaction (stage 3). Here they are stubs behind `BetDecisionPort` |
 | E-10 | Database failover | A failover to an asynchronous replica can lose transactions that were committed and whose messages were already sent. Recovery then relies on A-03 and E-09; reconciliation beyond that is out of scope and stated in the README |
 | E-11 | Migrations | Applied by the monolith's release pipeline before the rollout of either Deployment. The integration process does not migrate; its startup probe stays red while migrations are pending |

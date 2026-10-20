@@ -1,6 +1,6 @@
 """Ticket states and the reasons persisted with them (`docs/kb/ticket-lifecycle.md`).
 
-The reason enums share their spelling with the wire enums in `protocol` (A-16); the domain cannot import
+The reason enums share their spelling with the wire enums in `protocol`; the domain cannot import
 `protocol`, so the runtime maps between them by value.
 """
 
@@ -26,6 +26,15 @@ class Decision(StrEnum):
     DECLINE = "DECLINE"
 
 
+class DeclineReason(StrEnum):
+    """Why we decline a ticket the provider recommended to accept; persisted as `decline_reason`."""
+
+    INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
+    LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
+    BET_NOT_PLACEABLE = "BET_NOT_PLACEABLE"
+    OTHER = "OTHER"
+
+
 class CancelReason(StrEnum):
     DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"
     APPLY_FAILED = "APPLY_FAILED"
@@ -38,7 +47,7 @@ class EscalationReason(StrEnum):
 
 
 class MessageRef(StrEnum):
-    """Which of our outbound messages a provider error refers to (A-02)."""
+    """Which of our outbound messages a provider error refers to."""
 
     TICKET = "TICKET"
     CONFIRM_RECOMMENDATION = "CONFIRM_RECOMMENDATION"
@@ -46,9 +55,9 @@ class MessageRef(StrEnum):
     REQUEST_CANCELLATION = "REQUEST_CANCELLATION"
 
 
-# Before acceptance: the stake is held and never captured, so only these states may compensate (D7).
+# Before acceptance: the stake is held and never captured, so only these states may compensate.
 AWAITING_RECOMMENDATION = frozenset({State.PENDING_SEND, State.SENT})
 # A message is owed to the provider and the relay sends it on its normal path.
 OUTBOX = frozenset({State.PENDING_SEND, State.CONFIRM_PENDING, State.DECLINE_PENDING, State.CANCEL_PENDING})
-# The final message was sent; re-sent after a reconnect within the loss window (D11).
+# The final message was sent; re-sent after a reconnect within the loss window.
 CLOSED_FINAL = frozenset({State.CONFIRMED, State.DECLINED, State.CANCELLED})

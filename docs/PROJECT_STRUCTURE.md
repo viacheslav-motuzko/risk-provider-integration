@@ -32,20 +32,23 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 ├── apps/
 │   ├── betting/                           STUB: monolith side
 │   │   ├── models.py                      [S3] Bet (PENDING_RISK, ACCEPTED, REJECTED, VOIDED)
-│   │   ├── services.py                    [S3] place_bet, accept_bet, reject_bet, void_bet
+│   │   ├── services.py                    [S3] place_bet, accept_bet (typed Rejection), reject_bet, void_bet
 │   │   └── management/commands/
 │   │       └── place_demo_bet.py          [S3] demo / load generator
 │   │
 │   ├── wallets/                           STUB: monolith side
 │   │   ├── models.py                      [S3] Wallet, WalletHold (one per bet: HELD / CAPTURED / RELEASED)
-│   │   └── services.py                    [S3] hold, capture, release (idempotent per bet)
+│   │   ├── services.py                    [S3] hold, capture, release (idempotent per bet); fund (demo, tests)
+│   │   └── tests/                         [S3] wallet operations
 │   │
 │   └── risk_integration/                  CORE
 │       ├── models.py                      [S2] RiskTicket (state, deadline_at, retransmit_at, last_sent_at, locked_by,
 │       │                                  locked_until, reasons, last error, ...)
 │       ├── migrations/                    [S2]
-│       ├── api.py                         [S3] the ONLY entry point the monolith uses: enqueue_ticket(...)
-│       ├── ports.py                       [S3] BetDecisionPort (accept / decline / void)
+│       ├── api.py                         [S3] the ONLY entry point the monolith uses: enqueue_ticket, TicketSnapshot
+│       ├── ports.py                       [S3] BetDecisionPort (accept -> Accepted | Rejected / decline / void)
+│       ├── services.py                    [S3] sync use cases run by run_db: apply_recommendation, cancel_ticket
+│       │                                  (lock, decide through the port, transition)
 │       ├── domain/                        [S2] pure: stdlib only
 │       │   ├── states.py, machine.py, errors.py
 │       ├── protocol/                      [S1] stdlib + pydantic only
@@ -56,7 +59,7 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 │       │   └── close_codes.py             AUTH_FAILED / DISPLACED / ALREADY_CONNECTED / PLANNED / TRANSIENT
 │       ├── persistence/                   [S2] the only ORM users besides models.py
 │       │   ├── tickets.py                 create_ticket, claim_due / claim_sent_for_resend / claim_finals_for_resend
-│       │   │                              (SKIP LOCKED + lease), record_* / cancel / escalate (CAS), find_expired
+│       │   │                              (SKIP LOCKED + lease), lock_awaiting, record_* / cancel / escalate (CAS), find_expired
 │       │   ├── errors.py                  classify_apply_failure: transient / permanent / unclassified (D4)
 │       │   └── db.py                      DbRunner (run_db): semaphore, context copy, SET LOCAL timeouts, hygiene
 │       ├── adapters/monolith.py           [S3] DjangoBetDecisionAdapter -> betting / wallets services
@@ -74,6 +77,8 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 │       └── tests/                         unit (domain, protocol), integration (persistence on Postgres),
 │                                          runtime (against the fake provider)
 │
+├── tests/                                 [S3] tests across the monolith and the integration (outside both
+│                                          packages, so the import contracts stay strict)
 ├── tools/fake_provider/                   [S4] NOT production code, in-process from pytest: server.py, scenarios.py, __main__.py
 ├── deploy/k8s/                            [S5] OPS: deployment.yaml only (replicas 1, probes, resources, grace period, rollout)
 │

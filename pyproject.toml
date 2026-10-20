@@ -6,8 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 
 dependencies = [
-    "django>=5.2,<5.3",            # E-02
-    "psycopg[binary]>=3.2",        # E-03
+    "django>=5.2,<5.3",            # LTS
+    "psycopg[binary]>=3.2",
     "dj-database-url>=2.3",
     "websockets>=14",
     "pydantic>=2.9",

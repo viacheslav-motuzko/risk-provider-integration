@@ -1,4 +1,4 @@
-"""Classification of how a provider session ended or was refused (D6).
+"""Classification of how a provider session ended or was refused, which decides the reconnect backoff.
 
 Takes plain integers so the transport maps its library's exceptions here and this module stays library-free.
 """
@@ -14,11 +14,11 @@ class SessionOutcome(StrEnum):
     TRANSIENT = "transient"
 
 
-# ASSUMPTION A-17: provider-specific close codes in the 4000-4999 range reserved for applications (RFC 6455).
-CLOSE_PLANNED = 4000  # ASSUMPTION A-14
+# ASSUMPTION: provider-specific close codes in the 4000-4999 range reserved for applications (RFC 6455).
+CLOSE_PLANNED = 4000  # the provider ends a session at its maximum lifetime
 CLOSE_AUTH_FAILED = 4001
 CLOSE_DISPLACED = 4002
-CLOSE_ALREADY_CONNECTED = 4003  # ASSUMPTION A-05
+CLOSE_ALREADY_CONNECTED = 4003  # the provider refuses a second session
 
 _BY_CLOSE_CODE = {
     CLOSE_PLANNED: SessionOutcome.PLANNED,
@@ -27,7 +27,7 @@ _BY_CLOSE_CODE = {
     CLOSE_ALREADY_CONNECTED: SessionOutcome.ALREADY_CONNECTED,
 }
 
-# ASSUMPTION A-17: a refused upgrade carries the reason in the HTTP status.
+# ASSUMPTION: a refused upgrade carries the reason in the HTTP status.
 _BY_HANDSHAKE_STATUS = {
     401: SessionOutcome.AUTH_FAILED,
     403: SessionOutcome.AUTH_FAILED,

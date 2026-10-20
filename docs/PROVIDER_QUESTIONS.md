@@ -8,7 +8,7 @@ Each entry has:
 - **Why it matters**: what goes wrong if we guess wrong.
 - **If different**: what changes in the code. Wire-format guesses live only in `apps/risk_integration/protocol/` (the anti-corruption layer), so most corrections stay in that package.
 
-Code references these IDs as `# ASSUMPTION A-xx` and `# QUESTION B-xx`. Environment assumptions (E-xx) are not questions to a counterpart; they are listed in the README.
+Code does not carry these IDs: where an assumption matters, the code states it in words, and provider guesses are marked `# ASSUMPTION:`. Environment assumptions (E-xx) are not questions to a counterpart; they are listed in the README.
 
 ## 1. Provider: correctness of the ticket flow
 
