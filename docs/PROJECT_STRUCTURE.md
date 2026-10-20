@@ -52,9 +52,9 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S7]` filled in that
 │       ├── protocol/                      [S1] stdlib + pydantic only
 │       │   ├── envelope.py                {type, ticket_id, ts, payload}
 │       │   ├── messages.py                outbound: Ticket, ConfirmRecommendation, DeclineRecommendation,
-│       │   │                              RequestCancellation; inbound: Recommendation, Error (A-01, A-02)
+│       │   │                              RequestCancellation; inbound: Recommendation, ProviderError (A-01, A-02)
 │       │   ├── codec.py                   encode / decode, malformed and unknown frames
-│       │   └── close_codes.py             AUTH_FAILED / DISPLACED / ALREADY_CONNECTED / TRANSIENT
+│       │   └── close_codes.py             AUTH_FAILED / DISPLACED / ALREADY_CONNECTED / PLANNED / TRANSIENT
 │       ├── persistence/                   [S2] the only ORM users besides models.py
 │       │   ├── tickets.py                 create_in_tx, claim_batch (SKIP LOCKED + lease), transition (CAS),
 │       │   │                              due_for_retransmit, find_expired, requeue_expired_leases
