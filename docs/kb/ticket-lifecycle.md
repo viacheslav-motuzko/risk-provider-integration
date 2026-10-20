@@ -1,6 +1,6 @@
 # Ticket lifecycle
 
-Revised at the stage 1 gate: B-01 escalates instead of voiding, apply failures have three classes, replies may beat the relay's own commit, final messages are re-sent uniformly (D11). Stage 2 implements the transition table in `domain/machine.py`; field names may still be refined there.
+Revised at the stage 1 gate: B-01 escalates instead of voiding, apply failures have three classes, replies may beat the relay's own commit, final messages are re-sent uniformly (D11). The transition table is implemented in `domain/machine.py` (stage 2), which adds one self-loop trigger, `FINAL_RESENT`, for the re-send of a final message after a reconnect.
 
 ```
 PENDING_SEND -> SENT -> CONFIRM_PENDING -> CONFIRMED
@@ -51,4 +51,4 @@ The sweeper never touches `CONFIRM_PENDING` or `DECLINE_PENDING`: the decision i
 
 ## Persisted fields
 
-Beyond state and the bet reference: `deadline_at`, `retransmit_at`, `last_sent_at`, `locked_by`, `locked_until`, the ticket payload snapshot, `recommendation` (ACCEPT or DECLINE as received), `decline_reason`, `cancel_reason`, `last_error_code`, `last_error_ref_type`, `escalation_reason`. Partial indexes on the non-terminal states serve the claim, retransmit and deadline queries, so the table can grow without slowing them; the re-send query uses an index on `last_sent_at` for closed states. Retention: B-04.
+Beyond state and the bet reference: `created_at` (DB default), `deadline_at`, `retransmit_at`, `last_sent_at`, `locked_by`, `locked_until`, the ticket payload snapshot, `recommendation` (ACCEPT or DECLINE as received), `decline_reason`, `cancel_reason`, `last_error_code`, `last_error_ref_type`, `escalation_reason`. Partial indexes on the non-terminal states serve the claim, retransmit and deadline queries, so the table can grow without slowing them; the re-send query uses an index on `last_sent_at` for closed states. Check constraints: the state is a known value, a cancelled or cancelling ticket has a `cancel_reason`, an escalated one has an `escalation_reason`. Retention: B-04.

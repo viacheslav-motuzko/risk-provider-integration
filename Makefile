@@ -5,7 +5,7 @@ export
 UV ?= uv
 
 .DEFAULT_GOAL := help
-.PHONY: help install lock fmt lint typecheck imports test check db-up db-down migrate run up down
+.PHONY: help install lock fmt lint typecheck imports test check mutate db-up db-down migrate run up down makemigrations
 
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -36,6 +36,9 @@ test:  ## Run tests (needs Postgres: make db-up)
 
 check: lint typecheck imports test  ## Everything a stage must pass before its summary
 
+mutate:  ## Sabotage each invariant and check that a test fails (needs Postgres; prints a table)
+	$(UV) run python tools/mutation_check.py
+
 db-up:  ## Start Postgres and wait until it is healthy
 	docker compose up -d --wait db
 
@@ -44,6 +47,9 @@ db-down:  ## Stop Postgres (data volume is kept)
 
 migrate:  ## Apply migrations
 	$(UV) run python manage.py migrate
+
+makemigrations:  ## Make migrations
+	$(UV) run python manage.py makemigrations
 
 run:  ## Run the integration process locally
 	$(UV) run python manage.py run_risk_provider

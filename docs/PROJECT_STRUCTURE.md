@@ -55,9 +55,10 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 │       │   ├── codec.py                   encode / decode, malformed and unknown frames
 │       │   └── close_codes.py             AUTH_FAILED / DISPLACED / ALREADY_CONNECTED / PLANNED / TRANSIENT
 │       ├── persistence/                   [S2] the only ORM users besides models.py
-│       │   ├── tickets.py                 create_in_tx, claim_batch (SKIP LOCKED + lease), transition (CAS),
-│       │   │                              due_for_retransmit, find_expired, finals_in_loss_window
-│       │   └── db.py                      run_db(): semaphore, context copy, SET LOCAL timeouts, hygiene
+│       │   ├── tickets.py                 create_ticket, claim_due / claim_sent_for_resend / claim_finals_for_resend
+│       │   │                              (SKIP LOCKED + lease), record_* / cancel / escalate (CAS), find_expired
+│       │   ├── errors.py                  classify_apply_failure: transient / permanent / unclassified (D4)
+│       │   └── db.py                      DbRunner (run_db): semaphore, context copy, SET LOCAL timeouts, hygiene
 │       ├── adapters/monolith.py           [S3] DjangoBetDecisionAdapter -> betting / wallets services
 │       ├── transport/ws_client.py         [S4] connect, token provider (static stub), keepalive, close classification
 │       ├── runtime/                       [S4] async; never touches the ORM directly
