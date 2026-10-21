@@ -8,7 +8,7 @@ UV ?= uv
 .PHONY: help install lock fmt lint typecheck imports test check mutate db-up db-down migrate run up demo down makemigrations
 
 help:  ## List targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 install:  ## Create the environment from uv.lock
 	$(UV) sync

@@ -305,6 +305,15 @@ def test_the_command_refuses_invalid_settings_without_echoing_values(monkeypatch
     assert "not-a-number" not in message
 
 
+def test_the_command_refuses_a_reconnect_delay_that_outlasts_the_ticket_deadline(monkeypatch):
+    monkeypatch.setenv("RISK_PROVIDER_URL", "wss://provider.example")
+    monkeypatch.setenv("RISK_PROVIDER_TOKEN", "s3cr3t")
+    monkeypatch.setenv("RISK_RECONNECT_MAX", str(django_settings.RISK_TICKET_DEADLINE.total_seconds()))
+
+    with pytest.raises(CommandError, match="RISK_RECONNECT_MAX"):
+        call_command("run_risk_provider")
+
+
 class _IdleApp:
     def __init__(self) -> None:
         self.shutdown = Shutdown()

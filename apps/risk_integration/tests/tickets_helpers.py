@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from django.db.migrations.loader import MigrationLoader
 from django.db.models.functions import Now
 
 from apps.risk_integration.domain.states import State
@@ -21,6 +22,12 @@ def new_ticket(deadline: timedelta = DEADLINE) -> UUID:
         stake=Decimal("10.50"), currency="EUR", odds=Decimal("1.8500"), selection_id="sel-1", customer_ref="c-1"
     )
     return create_ticket(bet_id=next(_bet_ids), snapshot=snapshot, deadline=deadline)
+
+
+def latest_migration() -> str:
+    """The app's newest migration: unrecording it makes the schema pending."""
+    ((_, name),) = MigrationLoader(None, ignore_no_migrations=True).graph.leaf_nodes("risk_integration")
+    return str(name)
 
 
 def ago(seconds: float) -> Any:

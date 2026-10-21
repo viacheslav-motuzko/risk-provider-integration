@@ -31,6 +31,7 @@ WS_CLIENT = "apps/risk_integration/transport/ws_client.py"
 HEALTH = "apps/risk_integration/runtime/health.py"
 APP = "apps/risk_integration/runtime/app.py"
 COMMAND = "apps/risk_integration/management/commands/run_risk_provider.py"
+CONFIG = "apps/risk_integration/runtime/config.py"
 
 TIMEOUT_S = 120
 
@@ -102,7 +103,7 @@ MUTATIONS = (
         "loss-window-open",
         "the final re-send ignores the window start",
         TICKETS,
-        (("last_sent_at__gte=window_start, ", ""),),
+        (("        last_sent_at__gte=window_start,\n", ""),),
     ),
     Mutation(
         "create-outside-tx",
@@ -195,8 +196,31 @@ MUTATIONS = (
     Mutation(
         "compensate-before-deadline",
         "the deadline cancellation compensates a ticket that is not due",
+        SERVICES,
+        (
+            (
+                "    if ticket is None or (trigger is Trigger.DEADLINE_PASSED and not ticket.overdue):\n",
+                "    if ticket is None:\n",
+            ),
+        ),
+    ),
+    Mutation(
+        "apply-past-deadline",
+        "a recommendation is applied after the deadline, however late a stall delivered it",
+        SERVICES,
+        (("    if ticket.overdue:\n        return Ignored.PAST_DEADLINE\n", ""),),
+    ),
+    Mutation(
+        "final-resend-uncapped",
+        "a final message is re-sent after every reconnect, since its re-send lies in the next window",
         TICKETS,
-        (("        due &= Q(deadline_at__lte=Now())\n", "        pass\n"),),
+        (("        final_resends__lt=FINAL_RESENDS_MAX,\n", ""),),
+    ),
+    Mutation(
+        "final-resend-not-counted",
+        "a final re-send is not counted, so the cap never applies",
+        TICKETS,
+        (('        values["final_resends"] = F("final_resends") + 1\n', "        pass\n"),),
     ),
     Mutation(
         "ticket-outside-bet-tx",
@@ -388,6 +412,23 @@ MUTATIONS = (
         "a planned close reconnects at once even after a session that did not last",
         BACKOFF,
         (("case SessionOutcome.PLANNED if stable:", "case SessionOutcome.PLANNED:"),),
+    ),
+    Mutation(
+        "reconnect-cap-above-deadline",
+        "the reconnect delay may grow past the ticket deadline, so a reconnect outlasts the bets placed meanwhile",
+        CONFIG,
+        (
+            (
+                "    reconnect_max: Duration = timedelta(seconds=5)\n",
+                "    reconnect_max: Duration = timedelta(seconds=30)\n",
+            ),
+        ),
+    ),
+    Mutation(
+        "reconnect-cap-unchecked",
+        "the command accepts a reconnect delay cap that outlasts the ticket deadline",
+        COMMAND,
+        (("        if integration.reconnect_max >= settings.RISK_TICKET_DEADLINE:\n", "        if False:\n"),),
     ),
     Mutation(
         "displaced-immediate",

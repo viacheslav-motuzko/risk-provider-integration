@@ -6,7 +6,7 @@ from apps.betting.models import Bet
 from apps.betting.services import PlacedBet, place_bet
 from apps.risk_integration.adapters.monolith import DjangoBetDecisionAdapter
 from apps.risk_integration.domain.states import State
-from apps.risk_integration.services import Applied
+from apps.risk_integration.services import Applied, Ignored
 from apps.wallets import services as wallets
 from apps.wallets.models import Wallet, WalletHold
 
@@ -38,5 +38,5 @@ def hold_state(bet_id: int) -> str | None:
     return WalletHold.objects.filter(bet_id=bet_id).values_list("state", flat=True).first()
 
 
-def applied_state(applied: Applied | None) -> State | None:
-    return None if applied is None else applied.state
+def applied_state(applied: Applied | Ignored) -> State | Ignored:
+    return applied.state if isinstance(applied, Applied) else applied

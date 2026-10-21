@@ -3,7 +3,7 @@ monolith's `atomic` for `create_ticket`. Claims hold row locks until that transa
 unit of work of its own.
 
 Transitions are conditional updates built from `domain.machine.RULES`; each clears the lease and returns whether
-it applied. A miss (duplicate, late reply, lost lease) is a normal outcome for the caller to log and count.
+it applied. A miss (duplicate, late reply, lost lease) is a normal outcome, not an error.
 Monolith side effects run in the same transaction, under the lock taken by `lock_awaiting` (`services.py`).
 """
 
@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from django.db import connection, transaction
-from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Max, Q, Value
+from django.db.models import BooleanField, DateTimeField, DurationField, ExpressionWrapper, F, Max, Q, Value
 from django.db.models.expressions import CombinedExpression
 from django.db.models.functions import Now
 
@@ -37,6 +37,9 @@ from apps.risk_integration.domain.states import (
     State,
 )
 from apps.risk_integration.models import RiskTicket
+
+# A re-send lands in the next session's loss window: without a cap it would go again after every reconnect.
+FINAL_RESENDS_MAX = 1
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,7 @@ class ClaimedTicket:
 class AwaitingTicket:
     bet_id: int
     age: timedelta
+    overdue: bool
 
 
 def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta) -> UUID:
@@ -102,8 +106,13 @@ def claim_finals_for_resend(
     *, owner: str, lease: timedelta, limit: int, window_start: datetime, since: datetime
 ) -> list[ClaimedTicket]:
     """After a (re)connect at DB time `since`: final messages sent in `[window_start, since)`, whatever their
-    type. Pages like `claim_sent_for_resend`."""
-    due = Q(state__in=CLOSED_FINAL, last_sent_at__gte=window_start, last_sent_at__lt=since)
+    type, and not yet re-sent `FINAL_RESENDS_MAX` times. Pages like `claim_sent_for_resend`."""
+    due = Q(
+        state__in=CLOSED_FINAL,
+        final_resends__lt=FINAL_RESENDS_MAX,
+        last_sent_at__gte=window_start,
+        last_sent_at__lt=since,
+    )
     return _claim(due, owner=owner, lease=lease, limit=limit)
 
 
@@ -113,16 +122,15 @@ def release_leases(ticket_ids: Collection[UUID], *, owner: str) -> int:
     return RiskTicket.objects.filter(ticket_id__in=ticket_ids, locked_by=owner).update(locked_by="", locked_until=None)
 
 
-def lock_awaiting(ticket_id: UUID, *, past_deadline: bool = False) -> AwaitingTicket | None:
-    """lock a ticket that still waits for its recommendation and return its bet and age, or None if it
-    has moved on (duplicate, late) or, with `past_deadline`, is not yet due. The lock serializes appliers and the
-    sweeper on this ticket until commit, so the monolith decides once."""
+def lock_awaiting(ticket_id: UUID) -> AwaitingTicket | None:
+    """Locks a ticket that still waits for its recommendation and returns its bet, age and whether its deadline
+    has passed, or None if it has moved on (duplicate, late). The lock serializes appliers and the sweeper on this
+    ticket until commit, so the monolith decides once."""
     due = Q(ticket_id=ticket_id, state__in=AWAITING_RECOMMENDATION)
-    if past_deadline:
-        due &= Q(deadline_at__lte=Now())
     age = ExpressionWrapper(Now() - F("created_at"), output_field=DurationField())
-    row = RiskTicket.objects.select_for_update().filter(due).values_list("bet_id", age).first()
-    return None if row is None else AwaitingTicket(bet_id=row[0], age=row[1])
+    overdue = ExpressionWrapper(Q(deadline_at__lte=Now()), output_field=BooleanField())
+    row = RiskTicket.objects.select_for_update().filter(due).values_list("bet_id", age, overdue).first()
+    return None if row is None else AwaitingTicket(bet_id=row[0], age=row[1], overdue=row[2])
 
 
 def record_send(ticket_id: UUID, sent_from: State, *, owner: str, retransmit_after: timedelta) -> bool:
@@ -135,6 +143,8 @@ def record_send(ticket_id: UUID, sent_from: State, *, owner: str, retransmit_aft
         values["retransmit_at"] = _db_now_plus(retransmit_after)
     elif trigger is Trigger.TICKET_RESENT:
         values["retransmit_at"] = None
+    elif trigger is Trigger.FINAL_RESENT:
+        values["final_resends"] = F("final_resends") + 1
     return _transition(ticket_id, trigger, owner=owner, **values)
 
 

@@ -16,6 +16,7 @@ from apps.risk_integration.runtime.health import Health, Heartbeat, Heartbeats, 
 from apps.risk_integration.runtime.relay import Relay, RelaySettings
 from apps.risk_integration.runtime.shutdown import Shutdown
 from apps.risk_integration.runtime.sweeper import Sweeper, SweeperSettings
+from apps.risk_integration.tests.tickets_helpers import latest_migration
 
 WAIT = 5
 STALE_AFTER = timedelta(seconds=60)
@@ -176,5 +177,6 @@ async def test_the_probes_answer_over_http_with_their_status_and_the_metrics_are
 @pytest.mark.django_db
 def test_a_migration_not_yet_applied_is_reported_pending():
     assert pending_migrations() == []
-    MigrationRecorder(connection).record_unapplied("risk_integration", "0001_initial")
-    assert pending_migrations() == ["risk_integration.0001_initial"]
+    latest = latest_migration()
+    MigrationRecorder(connection).record_unapplied("risk_integration", latest)
+    assert pending_migrations() == [f"risk_integration.{latest}"]

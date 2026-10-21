@@ -20,9 +20,6 @@ COMPENSATION_FAILURES = Counter(
 ESCALATIONS = Counter("risk_escalations_total", "Tickets escalated to risk operations", ["reason"])
 ESCALATION_FAILURES = Counter("risk_escalation_failures_total", "Escalations lost to a database error", ["kind"])
 MESSAGES_SENT = Counter("risk_messages_sent_total", "Frames written to the provider", ["type", "attempt"])
-SENDS_NOT_RECORDED = Counter(
-    "risk_sends_not_recorded_total", "Sends whose transition missed: a reply came first, or the lease was lost"
-)
 DB_ERRORS = Counter("risk_loop_db_errors_total", "Transient database errors in a loop pass", ["loop", "kind"])
 SESSIONS_ENDED = Counter(
     "risk_sessions_ended_total",

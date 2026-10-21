@@ -17,7 +17,7 @@ from apps.risk_integration.domain.states import Decision, State
 from apps.risk_integration.persistence import tickets
 from apps.risk_integration.persistence.db import DbRunner
 from apps.risk_integration.ports import AcceptOutcome, BetDecisionPort
-from apps.risk_integration.tests.tickets_helpers import ago, force, row
+from apps.risk_integration.tests.tickets_helpers import force, row
 from apps.wallets.models import HoldState
 from tests.flow_helpers import FUNDS, PORT, STAKE, applied_state, balance, bet_state, funded_bet, hold_state
 
@@ -34,31 +34,31 @@ def test_duplicate_recommendation_applied_by_two_appliers_at_once_moves_money_on
         lambda port: applied_state(services.apply_recommendation(port, placed.ticket_id, Decision.DECLINE)),
     )
 
-    assert (first, second) == (State.DECLINE_PENDING, None)
+    assert (first, second) == (State.DECLINE_PENDING, services.Ignored.NOT_AWAITING)
     assert (hold_state(placed.bet_id), balance()) == (HoldState.RELEASED, FUNDS)
 
 
 def test_cancellation_that_wins_the_race_with_an_accept_leaves_the_stake_released():
     placed = funded_bet()
-    force(placed.ticket_id, state=State.SENT, deadline_at=ago(1))
+    force(placed.ticket_id, state=State.SENT)
 
     cancelled, accepted = _race(
-        lambda port: services.cancel_ticket(port, placed.ticket_id, Trigger.DEADLINE_PASSED),
+        lambda port: services.cancel_ticket(port, placed.ticket_id, Trigger.TICKET_REFUSED),
         lambda port: applied_state(services.apply_recommendation(port, placed.ticket_id, Decision.ACCEPT)),
     )
 
-    assert (cancelled, accepted) == (True, None)
+    assert (cancelled, accepted) == (True, services.Ignored.NOT_AWAITING)
     assert (row(placed.ticket_id).state, bet_state(placed.bet_id)) == (State.CANCEL_PENDING, BetState.VOIDED)
     assert (hold_state(placed.bet_id), balance()) == (HoldState.RELEASED, FUNDS)
 
 
 def test_accept_that_wins_the_race_with_a_cancellation_keeps_the_stake_captured():
     placed = funded_bet()
-    force(placed.ticket_id, state=State.SENT, deadline_at=ago(1))
+    force(placed.ticket_id, state=State.SENT)
 
     accepted, cancelled = _race(
         lambda port: applied_state(services.apply_recommendation(port, placed.ticket_id, Decision.ACCEPT)),
-        lambda port: services.cancel_ticket(port, placed.ticket_id, Trigger.DEADLINE_PASSED),
+        lambda port: services.cancel_ticket(port, placed.ticket_id, Trigger.TICKET_REFUSED),
     )
 
     assert (accepted, cancelled) == (State.CONFIRM_PENDING, False)
@@ -72,7 +72,7 @@ async def test_decision_applied_through_run_db_commits_with_the_monolith_effect(
         placed = await run_db(funded_bet)
 
         applied = await run_db(services.apply_recommendation, PORT, placed.ticket_id, Decision.ACCEPT)
-        assert applied is not None
+        assert isinstance(applied, services.Applied)
         assert applied.state == State.CONFIRM_PENDING
 
         assert await run_db(lambda: (bet_state(placed.bet_id), hold_state(placed.bet_id))) == (

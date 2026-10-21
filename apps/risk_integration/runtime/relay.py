@@ -186,8 +186,7 @@ class Relay:
                 _count_db_error(exc)
                 return
             if not recorded:
-                log.info("send_not_recorded", state=claimed.state)
-                metrics.SENDS_NOT_RECORDED.inc()
+                log.debug("send_not_recorded", state=claimed.state)
 
     async def _release(self, batch: list[tickets.ClaimedTicket]) -> None:
         """Frees the rest of a batch the session did not get to send, so the next session sends it at once.

@@ -39,7 +39,7 @@ A reply can arrive before the relay has committed the transition for the frame i
 | 15 | `CANCEL_PENDING`, `CANCELLED` | `ERROR` with `ref_type = REQUEST_CANCELLATION`, code other than `UNKNOWN_TICKET` | `ESCALATED` | `last_error_*`, `escalation_reason = CANCEL_REJECTED` (A-09, B-03). Retried in place like row 14 (D4) |
 
 Ignored, logged and counted (no transition):
-- A `RECOMMENDATION` in any state other than `PENDING_SEND` or `SENT`: a duplicate, or late after the deadline cancellation or another cancellation (D11). Between the deadline and the sweeper's pass the ticket is still `SENT` and the recommendation is applied.
+- A `RECOMMENDATION` in any state other than `PENDING_SEND` or `SENT`: a duplicate, or late after the deadline cancellation or another cancellation (D11). A `RECOMMENDATION` for a ticket past its `deadline_at` is ignored too, although the ticket still waits for the sweeper's pass: the deadline is a hard line (D11).
 - An `ERROR` about a decline in `DECLINE_PENDING` or `DECLINED`: the provider treats the ticket as not accepted anyway (A-07).
 - An `ERROR` about a cancellation with code `UNKNOWN_TICKET`: the cancellation counts as done (A-09).
 - Any other combination, an `ERROR` without `ticket_id`, and messages for unknown tickets.
@@ -53,4 +53,4 @@ The sweeper never touches `CONFIRM_PENDING` or `DECLINE_PENDING`: the decision i
 
 ## Persisted fields
 
-Beyond state and the bet reference: `created_at` (DB default), `deadline_at`, `retransmit_at`, `last_sent_at`, `locked_by`, `locked_until`, the ticket payload snapshot, `recommendation` (ACCEPT or DECLINE as received), `decline_reason`, `cancel_reason`, `last_error_code`, `last_error_ref_type`, `escalation_reason`. Partial indexes on the non-terminal states serve the claim, retransmit and deadline queries, so the table can grow without slowing them; the re-send query uses an index on `last_sent_at` for closed states. Check constraints: the state is a known value, a cancelled or cancelling ticket has a `cancel_reason`, an escalated one has an `escalation_reason`. Retention: B-04.
+Beyond state and the bet reference: `created_at` (DB default), `deadline_at`, `retransmit_at`, `last_sent_at`, `final_resends` (re-sends of the final message after a reconnect, capped at one, D11), `locked_by`, `locked_until`, the ticket payload snapshot, `recommendation` (ACCEPT or DECLINE as received), `decline_reason`, `cancel_reason`, `last_error_code`, `last_error_ref_type`, `escalation_reason`. Partial indexes on the non-terminal states serve the claim, retransmit and deadline queries, so the table can grow without slowing them; the re-send query uses an index on `last_sent_at` for closed states. Check constraints: the state is a known value, a cancelled or cancelling ticket has a `cancel_reason`, an escalated one has an `escalation_reason`. Retention: B-04.

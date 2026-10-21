@@ -303,6 +303,27 @@ def test_final_messages_sent_within_the_loss_window_are_resent_whatever_their_ty
     assert again == []
 
 
+def test_a_final_message_is_resent_after_one_reconnect_only_although_its_resend_lies_in_the_next_window():
+    tid = new_ticket()
+    tickets.record_accept(tid)
+    tickets.claim_due(owner=A, lease=LEASE, limit=100)
+    tickets.record_send(tid, State.CONFIRM_PENDING, owner=A, retransmit_after=ZERO)
+    force(tid, last_sent_at=ago(10))
+
+    def reconnect() -> list[tickets.ClaimedTicket]:
+        since = tickets.db_now()
+        last_final = tickets.last_final_sent_at()
+        assert last_final is not None
+        window_start = last_final - timedelta(seconds=40)
+        return tickets.claim_finals_for_resend(owner=A, lease=LEASE, limit=100, window_start=window_start, since=since)
+
+    assert claimed_ids(first := reconnect()) == {tid}
+    assert tickets.record_send(tid, first[0].state, owner=A, retransmit_after=ZERO)
+    assert row(tid).final_resends == 1
+
+    assert reconnect() == []
+
+
 def test_the_loss_window_of_a_new_process_ends_at_the_latest_final_send_and_ignores_open_tickets():
     assert tickets.last_final_sent_at() is None
     older, latest, still_sent = new_ticket(), new_ticket(), sent_ticket()

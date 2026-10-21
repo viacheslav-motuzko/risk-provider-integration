@@ -67,7 +67,7 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 plugins = ["mypy_django_plugin.main", "pydantic.mypy"]
-exclude = ["^\\.venv/", "^build/"]
+exclude = ["^\\.venv/", "^build/", "^docs/"]
 
 [tool.django-stubs]
 django_settings_module = "config.settings.test"

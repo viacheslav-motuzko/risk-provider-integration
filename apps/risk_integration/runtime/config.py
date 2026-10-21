@@ -63,7 +63,7 @@ class IntegrationSettings(BaseSettings):
 
     # Reconnect delays by how the last session ended; each is jittered down by up to half.
     reconnect_initial: Duration = timedelta(milliseconds=500)  # doubles per failure in a row
-    reconnect_max: Duration = timedelta(seconds=30)
+    reconnect_max: Duration = timedelta(seconds=5)
     standby_retry: Duration = timedelta(seconds=2)  # another instance holds the session: take over soon after
     displaced_backoff: Duration = timedelta(seconds=60)
     auth_backoff_initial: Duration = timedelta(seconds=30)  # doubles per failure in a row

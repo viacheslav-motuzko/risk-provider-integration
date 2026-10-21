@@ -25,6 +25,8 @@ class Command(BaseCommand):
             integration = IntegrationSettings()
         except ValidationError as exc:
             raise CommandError(f"invalid RISK_* settings: {_describe(exc)}") from None
+        if integration.reconnect_max >= settings.RISK_TICKET_DEADLINE:
+            raise CommandError("invalid RISK_* settings: RISK_RECONNECT_MAX must be shorter than the ticket deadline")
         configure_logging(integration.log_level)
         # The default is Django's (0) because the settings module is shared with the web pods; this process sets it.
         if settings.DATABASES["default"]["CONN_MAX_AGE"] == 0:

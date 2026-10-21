@@ -17,7 +17,7 @@ from apps.risk_integration.persistence.db import DbRunner
 from apps.risk_integration.ports import AcceptOutcome
 from apps.risk_integration.protocol.close_codes import CLOSE_GOING_AWAY
 from apps.risk_integration.protocol.messages import OutboundType
-from apps.risk_integration.tests.tickets_helpers import row, state
+from apps.risk_integration.tests.tickets_helpers import latest_migration, row, state
 from tests.flow_helpers import PORT, funded_bet
 from tests.scenario_helpers import TOKEN, Running, count, counted, make_db_runner, running
 from tools.fake_provider.server import WAIT, FakeProvider, RejectNew
@@ -154,7 +154,7 @@ async def test_a_refused_standby_is_ready_and_live_because_it_can_take_over(db, 
 
 
 async def test_no_loop_runs_until_every_migration_is_applied(db, fake):
-    await db(MigrationRecorder.Migration.objects.filter(app="risk_integration", name="0001_initial").delete)
+    await db(MigrationRecorder.Migration.objects.filter(app="risk_integration", name=latest_migration()).delete)
     try:
         with capture_logs() as logs:
             async with running(fake, startup_retry=timedelta(milliseconds=20)) as run:
@@ -169,7 +169,7 @@ async def test_no_loop_runs_until_every_migration_is_applied(db, fake):
 
 
 def _record_applied() -> None:
-    MigrationRecorder.Migration.objects.get_or_create(app="risk_integration", name="0001_initial")
+    MigrationRecorder.Migration.objects.get_or_create(app="risk_integration", name=latest_migration())
 
 
 async def _is(db: DbRunner, ticket_id: Any, expected: State) -> bool:

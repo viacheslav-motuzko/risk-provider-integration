@@ -487,6 +487,27 @@ async def test_a_dropped_session_reconnects_and_resends_sent_tickets_and_recent_
     assert await money(db, confirmed.bet_id) == (BetState.ACCEPTED, HoldState.CAPTURED, 2 * (FUNDS - STAKE))
 
 
+async def test_a_final_message_is_resent_after_one_reconnect_not_after_every_later_one(db, fake):
+    async with running(fake) as app:
+        confirmed = await db(funded_bet)
+        await reaches(app, db, confirmed.ticket_id, State.CONFIRMED)
+
+        await fake.close_sessions(CLOSE_SERVER_ERROR)
+        await app.wait(fake.wait_for(CONFIRM, confirmed.ticket_id, count=2))
+
+        async def resend_recorded() -> bool:
+            resends: int = (await db(row, confirmed.ticket_id)).final_resends
+            return resends == 1
+
+        await app.until(resend_recorded)
+        await fake.close_sessions(CLOSE_SERVER_ERROR)
+        await app.wait(fake.wait_for_session(opened=3))
+        sentinel = await db(funded_bet)
+        await app.wait(fake.wait_for(TICKET, sentinel.ticket_id))
+
+    assert len(fake.frames(CONFIRM, confirmed.ticket_id)) == 2
+
+
 async def test_a_refused_token_keeps_the_process_retrying_until_the_provider_accepts_it(db, fake):
     refused = count(ENDED, outcome="auth_failed", inbound_queue_full="false")
     async with running(fake, token="rotated") as app:

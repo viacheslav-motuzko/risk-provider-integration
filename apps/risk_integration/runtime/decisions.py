@@ -58,9 +58,9 @@ class Decisions:
                 metrics.APPLY_FAILURES.labels(kind="permanent").inc()
                 await self.compensate(ticket_id, Trigger.APPLY_FAILED)
                 return
-            if applied is None:
-                log.info("recommendation_ignored", decision=decision, reason="not_awaiting")
-                metrics.INBOUND_IGNORED.labels(message="RECOMMENDATION", reason="not_awaiting").inc()
+            if isinstance(applied, services.Ignored):
+                log.info("recommendation_ignored", decision=decision, reason=applied)
+                metrics.INBOUND_IGNORED.labels(message="RECOMMENDATION", reason=applied).inc()
                 return
             waited = applied.waited.total_seconds()
             log.info("recommendation_applied", decision=decision, state=applied.state, waited_seconds=round(waited, 3))

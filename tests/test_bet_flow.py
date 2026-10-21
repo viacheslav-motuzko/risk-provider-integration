@@ -108,7 +108,7 @@ def test_an_applied_decision_reports_how_long_the_customer_waited_on_db_time():
 
     applied = services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT)
 
-    assert applied is not None
+    assert isinstance(applied, services.Applied)
     assert timedelta(seconds=3) <= applied.waited < timedelta(seconds=4)
 
 
@@ -149,9 +149,27 @@ def test_duplicate_recommendation_is_ignored_and_moves_no_money(decision):
     services.apply_recommendation(PORT, placed.ticket_id, decision)
     after_first = (row(placed.ticket_id).state, bet_state(placed.bet_id), hold_state(placed.bet_id), balance())
 
-    assert services.apply_recommendation(PORT, placed.ticket_id, decision) is None
+    assert services.apply_recommendation(PORT, placed.ticket_id, decision) is services.Ignored.NOT_AWAITING
 
     assert (row(placed.ticket_id).state, bet_state(placed.bet_id), hold_state(placed.bet_id), balance()) == after_first
+
+
+@pytest.mark.parametrize("decision", list(Decision))
+def test_a_recommendation_past_the_deadline_moves_no_money_and_the_deadline_cancellation_voids_the_bet(decision):
+    placed = funded_bet()
+    force(placed.ticket_id, state=State.SENT, deadline_at=ago(1))
+
+    assert services.apply_recommendation(PORT, placed.ticket_id, decision) is services.Ignored.PAST_DEADLINE
+
+    assert (row(placed.ticket_id).state, bet_state(placed.bet_id)) == (State.SENT, BetState.PENDING_RISK)
+    assert (hold_state(placed.bet_id), balance()) == (HoldState.HELD, FUNDS - STAKE)
+
+    assert services.cancel_ticket(PORT, placed.ticket_id, Trigger.DEADLINE_PASSED)
+    assert (bet_state(placed.bet_id), hold_state(placed.bet_id), balance()) == (
+        BetState.VOIDED,
+        HoldState.RELEASED,
+        FUNDS,
+    )
 
 
 @pytest.mark.parametrize("start", AWAITING)
@@ -180,7 +198,7 @@ def test_recommendation_after_the_cancellation_is_ignored():
     force(placed.ticket_id, state=State.SENT, deadline_at=ago(1))
     services.cancel_ticket(PORT, placed.ticket_id, Trigger.DEADLINE_PASSED)
 
-    assert services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT) is None
+    assert services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT) is services.Ignored.NOT_AWAITING
 
     assert (row(placed.ticket_id).state, bet_state(placed.bet_id)) == (State.CANCEL_PENDING, BetState.VOIDED)
     assert balance() == FUNDS
