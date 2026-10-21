@@ -17,6 +17,7 @@ from apps.risk_integration.protocol.codec import FrameError, decode
 from apps.risk_integration.protocol.messages import InboundMessage, ProviderError, Recommendation
 from apps.risk_integration.runtime import metrics
 from apps.risk_integration.runtime.decisions import Decisions
+from apps.risk_integration.runtime.health import Heartbeat
 from apps.risk_integration.transport.ws_client import ProviderSession
 
 log = structlog.get_logger(__name__)
@@ -42,13 +43,19 @@ async def read_frames(session: ProviderSession, queue: InboundQueue) -> NoReturn
         await queue.put(message)
 
 
-async def apply_messages(queue: InboundQueue, decisions: Decisions) -> NoReturn:
+async def apply_messages(queue: InboundQueue, decisions: Decisions, heartbeat: Heartbeat) -> NoReturn:
     while True:
-        match await queue.get():
-            case Recommendation() as recommendation:
-                await decisions.apply(recommendation.ticket_id, Decision(recommendation.decision.value))
-            case ProviderError() as error:
-                await _on_provider_error(error, decisions)
+        heartbeat.park()
+        message = await queue.get()
+        heartbeat.beat()
+        try:
+            match message:
+                case Recommendation() as recommendation:
+                    await decisions.apply(recommendation.ticket_id, Decision(recommendation.decision.value))
+                case ProviderError() as error:
+                    await _on_provider_error(error, decisions)
+        finally:
+            queue.task_done()
 
 
 async def _on_provider_error(error: ProviderError, decisions: Decisions) -> None:

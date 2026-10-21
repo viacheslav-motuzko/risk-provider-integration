@@ -44,7 +44,7 @@ class Decisions:
     async def apply(self, ticket_id: UUID, decision: Decision) -> None:
         with bound_contextvars(ticket_id=str(ticket_id)):
             try:
-                state = await self._run_db(services.apply_recommendation, self._port, ticket_id, decision)
+                applied = await self._run_db(services.apply_recommendation, self._port, ticket_id, decision)
             except Exception as exc:
                 failure = classify_apply_failure(exc)
                 if failure is None:
@@ -58,12 +58,14 @@ class Decisions:
                 metrics.APPLY_FAILURES.labels(kind="permanent").inc()
                 await self.compensate(ticket_id, Trigger.APPLY_FAILED)
                 return
-            if state is None:
+            if applied is None:
                 log.info("recommendation_ignored", decision=decision, reason="not_awaiting")
                 metrics.INBOUND_IGNORED.labels(message="RECOMMENDATION", reason="not_awaiting").inc()
                 return
-            log.info("recommendation_applied", decision=decision, state=state)
-            metrics.DECISIONS.labels(state=state).inc()
+            waited = applied.waited.total_seconds()
+            log.info("recommendation_applied", decision=decision, state=applied.state, waited_seconds=round(waited, 3))
+            metrics.DECISIONS.labels(state=applied.state).inc()
+            metrics.TIME_TO_DECISION.labels(decision=decision).observe(waited)
 
     async def compensate(self, ticket_id: UUID, trigger: Trigger, *, error_code: str = "") -> bool:
         """Void the bet, release the stake and set `CANCEL_PENDING`, if the ticket still waits. False when the

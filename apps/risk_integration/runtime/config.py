@@ -3,7 +3,7 @@ given in seconds. The monolith's web pods never load this, so they need no provi
 
 import socket
 from datetime import timedelta
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BeforeValidator, Field, SecretStr, field_validator, model_validator
@@ -26,6 +26,20 @@ class IntegrationSettings(BaseSettings):
     provider_token: SecretStr
     provider_allow_plaintext: bool = False  # ws:// for local development and tests only
     instance_name: str = Field(default_factory=socket.gethostname, min_length=1)
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    # Probes and metrics. All interfaces: the kubelet and Prometheus reach the pod IP.
+    health_host: str = "0.0.0.0"  # noqa: S104
+    health_port: int = Field(9100, ge=0, le=65535)
+    startup_retry: Duration = timedelta(seconds=2)
+    # Every loop beats at least this often, plus its planned waits; the longest normal gap is an escalation
+    # retried on a slow database (about 25 s).
+    liveness_stale_after: Duration = timedelta(seconds=60)
+    # Ready while a unit of work committed this recently; the sweeper runs one every second, standby or not.
+    readiness_db_within: Duration = timedelta(seconds=10)
+    # SIGTERM: the appliers finish the queue and the final messages owed go out within this, then the session
+    # closes (ws_close_timeout). terminationGracePeriodSeconds must exceed both together.
+    drain_timeout: Duration = timedelta(seconds=10)
 
     appliers: int = Field(4, ge=1, le=64)
     inbound_queue_size: int = Field(64, ge=1)
@@ -41,7 +55,9 @@ class IntegrationSettings(BaseSettings):
     ws_open_timeout: Duration = timedelta(seconds=10)
     ws_ping_interval: Duration = timedelta(seconds=20)
     ws_ping_timeout: Duration = timedelta(seconds=20)
-    ws_close_timeout: Duration = timedelta(seconds=10)
+    # Also how long a dropped session takes to be noticed after a keepalive failure: the library waits for a close
+    # handshake that an unread socket never completes.
+    ws_close_timeout: Duration = timedelta(seconds=2)
     ws_send_timeout: Duration = timedelta(seconds=2)
     token_timeout: Duration = timedelta(seconds=5)
 

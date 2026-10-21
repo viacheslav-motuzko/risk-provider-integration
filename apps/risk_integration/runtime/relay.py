@@ -4,6 +4,8 @@ the send and the commit sends again, which the provider deduplicates by `ticket_
 Every session starts by re-sending what the previous session may have lost: `TICKET` for every `SENT` ticket
 (the provider does not replay recommendations), and every final message sent within the loss window before the
 previous session ended. Only then does the relay poll the outbox.
+
+A draining process stops the relay and calls `flush` once: the final messages owed go out, a `TICKET` does not.
 """
 
 import asyncio
@@ -32,6 +34,7 @@ from apps.risk_integration.protocol.messages import (
     Ticket,
 )
 from apps.risk_integration.runtime import metrics
+from apps.risk_integration.runtime.health import Heartbeat
 
 log = structlog.get_logger(__name__)
 
@@ -58,15 +61,17 @@ class RelaySettings:
 
 
 class Relay:
-    def __init__(self, run_db: DbRunner, settings: RelaySettings) -> None:
+    def __init__(self, run_db: DbRunner, settings: RelaySettings, heartbeat: Heartbeat) -> None:
         self._run_db = run_db
         self._settings = settings
+        self._heartbeat = heartbeat
 
     async def run(self, session: Sender) -> NoReturn:
         resend: deque[Claim] | None = None
         batch: list[tickets.ClaimedTicket] = []
         try:
             while True:
+                self._heartbeat.beat()
                 try:
                     if resend is None:
                         resend = await self._resend_owed()
@@ -77,10 +82,32 @@ class Relay:
                     continue
                 for claimed in batch:
                     await self._send(session, claimed)
+                    self._heartbeat.beat()
                 if not resend and len(batch) < self._settings.batch_size:
                     await asyncio.sleep(self._settings.poll_interval.total_seconds())
         finally:
             # Runs on a failed send and on cancellation alike, before the next session starts.
+            self._heartbeat.park()
+            await self._release(batch)
+
+    async def flush(self, session: Sender) -> int:
+        """One pass over the final messages owed, for a draining process: the provider learns every decision
+        this process committed. Returns how many were sent. Raises like a send or a claim does."""
+        settings = self._settings
+        claim = partial(
+            tickets.claim_final_pending, owner=settings.owner, lease=settings.lease, limit=settings.batch_size
+        )
+        batch: list[tickets.ClaimedTicket] = []
+        sent = 0
+        try:
+            while True:
+                batch = await self._claim(claim)
+                for claimed in batch:
+                    await self._send(session, claimed)
+                    sent += 1
+                if len(batch) < settings.batch_size:
+                    return sent
+        finally:
             await self._release(batch)
 
     async def _resend_owed(self) -> deque[Claim]:

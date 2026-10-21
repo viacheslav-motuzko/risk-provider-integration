@@ -38,8 +38,9 @@ class RejectNew(StrEnum):
 
 
 class FakeProvider:
-    def __init__(self, *, token: str) -> None:
+    def __init__(self, *, token: str, host: str = "127.0.0.1", port: int = 0) -> None:
         self.token = token  # the one it accepts; a test may change it
+        self._host, self._port = host, port
         self.reject_new: RejectNew | None = None
         self.ticket_reply = TicketReply.ACCEPT
         self.duplicates = 1  # copies of each recommendation
@@ -47,12 +48,13 @@ class FakeProvider:
         self.refuse_cancellation = False
         self.received: list[Envelope] = []
         self.sessions_opened = 0
+        self.close_codes: list[int | None] = []  # sent by the client, per ended session
         self._arrived = asyncio.Condition()
         self._connections: set[ServerConnection] = set()
         self._server: Server | None = None
 
     async def __aenter__(self) -> Self:
-        self._server = await serve(self._handle, "127.0.0.1", 0, process_request=self._authorize)
+        self._server = await serve(self._handle, self._host, self._port, process_request=self._authorize)
         return self
 
     async def __aexit__(
@@ -81,6 +83,12 @@ class FakeProvider:
         """Until a session is open and `opened` sessions have been accepted in all."""
         async with asyncio.timeout(WAIT), self._arrived:
             await self._arrived.wait_for(lambda: bool(self._connections) and self.sessions_opened >= opened)
+
+    async def wait_for_close(self, *, count: int = 1) -> list[int | None]:
+        """The client close codes, once `count` sessions have ended."""
+        async with asyncio.timeout(WAIT), self._arrived:
+            await self._arrived.wait_for(lambda: len(self.close_codes) >= count)
+        return self.close_codes
 
     async def send(self, frame: str) -> None:
         """Send a frame to every open session: a late, unknown or malformed message."""
@@ -128,7 +136,10 @@ class FakeProvider:
         except ConnectionClosed:
             pass  # the client went away; the next session is a new connection
         finally:
-            self._connections.discard(connection)
+            async with self._arrived:
+                self._connections.discard(connection)
+                self.close_codes.append(connection.close_code)
+                self._arrived.notify_all()
 
     def _replies(self, envelope: Envelope) -> list[str]:
         ticket_id = envelope.ticket_id

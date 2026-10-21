@@ -27,6 +27,8 @@ def integration_settings(url: str, **overrides: Any) -> IntegrationSettings:
         "provider_token": SecretStr(TOKEN),
         "provider_allow_plaintext": True,
         "instance_name": "scenario",
+        "health_host": "127.0.0.1",
+        "health_port": 0,
         "appliers": 2,
         "relay_poll_interval": timedelta(milliseconds=20),
         "sweeper_interval": timedelta(milliseconds=20),
@@ -56,8 +58,13 @@ def make_db_runner() -> DbRunner:
 class Running:
     """The app's task. Every wait also watches it, so a crash fails the test with its own error, not a timeout."""
 
-    def __init__(self, task: asyncio.Task[None]) -> None:
+    def __init__(self, task: asyncio.Task[None], app: IntegrationApp | None = None) -> None:
         self.task = task
+        self.app = app
+
+    def probe_url(self, path: str) -> str:
+        assert self.app is not None
+        return f"http://127.0.0.1:{self.app.health_port}{path}"
 
     async def stop(self) -> None:
         """Cancels the app, which closes its session; as close to a pod going away as a test gets in-process."""
@@ -95,7 +102,7 @@ async def running(
         port=port,
         tokens=StubTokenProvider(SecretStr(token)),
     )
-    run = Running(asyncio.create_task(app.run()))
+    run = Running(asyncio.create_task(app.run()), app)
     try:
         yield run
     finally:

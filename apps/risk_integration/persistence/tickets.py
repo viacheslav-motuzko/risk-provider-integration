@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from django.db import connection, transaction
-from django.db.models import DateTimeField, DurationField, ExpressionWrapper, Max, Q, Value
+from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Max, Q, Value
 from django.db.models.expressions import CombinedExpression
 from django.db.models.functions import Now
 
@@ -30,7 +30,7 @@ from apps.risk_integration.domain.machine import (
 from apps.risk_integration.domain.states import (
     AWAITING_RECOMMENDATION,
     CLOSED_FINAL,
-    OUTBOX,
+    FINAL_PENDING,
     CancelReason,
     Decision,
     DeclineReason,
@@ -58,6 +58,12 @@ class ClaimedTicket:
     cancel_reason: CancelReason | None
 
 
+@dataclass(frozen=True)
+class AwaitingTicket:
+    bet_id: int
+    age: timedelta
+
+
 def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta) -> UUID:
     """Must run in the transaction that creates the bet, so neither exists without the other"""
     if not transaction.get_connection().in_atomic_block:
@@ -76,9 +82,14 @@ def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta)
 
 def claim_due(*, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
     """The relay's normal pass: every message owed (OUTBOX) and SENT tickets at their retransmit point"""
-    owed = Q(state__in=OUTBOX - {State.PENDING_SEND}) | _before_deadline(State.PENDING_SEND)
+    owed = Q(state__in=FINAL_PENDING) | _before_deadline(State.PENDING_SEND)
     retransmit = _before_deadline(State.SENT) & Q(retransmit_at__lte=Now())
     return _claim(owed | retransmit, owner=owner, lease=lease, limit=limit)
+
+
+def claim_final_pending(*, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
+    """A draining relay's flush: final messages owed, never a `TICKET`."""
+    return _claim(Q(state__in=FINAL_PENDING), owner=owner, lease=lease, limit=limit)
 
 
 def claim_sent_for_resend(*, owner: str, lease: timedelta, limit: int, since: datetime) -> list[ClaimedTicket]:
@@ -102,15 +113,16 @@ def release_leases(ticket_ids: Collection[UUID], *, owner: str) -> int:
     return RiskTicket.objects.filter(ticket_id__in=ticket_ids, locked_by=owner).update(locked_by="", locked_until=None)
 
 
-def lock_awaiting(ticket_id: UUID, *, past_deadline: bool = False) -> int | None:
-    """lock a ticket that still waits for its recommendation and return its bet, or None if it
+def lock_awaiting(ticket_id: UUID, *, past_deadline: bool = False) -> AwaitingTicket | None:
+    """lock a ticket that still waits for its recommendation and return its bet and age, or None if it
     has moved on (duplicate, late) or, with `past_deadline`, is not yet due. The lock serializes appliers and the
     sweeper on this ticket until commit, so the monolith decides once."""
     due = Q(ticket_id=ticket_id, state__in=AWAITING_RECOMMENDATION)
     if past_deadline:
         due &= Q(deadline_at__lte=Now())
-    bet_id: int | None = RiskTicket.objects.select_for_update().filter(due).values_list("bet_id", flat=True).first()
-    return bet_id
+    age = ExpressionWrapper(Now() - F("created_at"), output_field=DurationField())
+    row = RiskTicket.objects.select_for_update().filter(due).values_list("bet_id", age).first()
+    return None if row is None else AwaitingTicket(bet_id=row[0], age=row[1])
 
 
 def record_send(ticket_id: UUID, sent_from: State, *, owner: str, retransmit_after: timedelta) -> bool:

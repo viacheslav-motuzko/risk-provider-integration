@@ -1,6 +1,6 @@
 """Metrics of the runtime loops. Labels are bounded enums only, never a ticket or bet id."""
 
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 FRAMES_DROPPED = Counter("risk_frames_dropped_total", "Inbound frames that could not be decoded", ["kind"])
 INBOUND_IGNORED = Counter(
@@ -30,3 +30,10 @@ SESSIONS_ENDED = Counter(
     ["outcome", "inbound_queue_full"],
 )
 SESSION_OPEN = Gauge("risk_session_open", "1 while this process holds a provider session")
+TIME_TO_DECISION = Histogram(
+    "risk_time_to_decision_seconds",
+    "Ticket age when its recommendation was applied: how long the customer waited",
+    ["decision"],
+    buckets=(0.1, 0.25, 0.5, 1, 2, 3, 5, 7.5, 10, 15),
+)
+INBOUND_QUEUE_DEPTH = Gauge("risk_inbound_queue_depth", "Decoded messages waiting for an applier")

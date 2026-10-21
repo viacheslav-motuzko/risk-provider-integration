@@ -21,8 +21,9 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 ├── README.md                              [S6]
 ├── pyproject.toml                         [scaffold] deps, ruff, type checker, pytest, import-linter
 ├── Makefile                               [scaffold] test / lint / migrate / up
-├── docker-compose.yml                     [scaffold: postgres] [S5: + app, fake provider]
-├── Dockerfile                             [S5] OPS, same image as the monolith
+├── docker-compose.yml                     [scaffold: postgres] [S5] + migrate (one-shot), fake-provider, app
+├── Dockerfile                             [S5] OPS, same image as the monolith in production; multi-stage, target
+│                                          `app` (default) without tests or tools, target `fake-provider` for compose
 ├── manage.py                              [scaffold]
 │
 ├── config/                                [scaffold]
@@ -62,7 +63,9 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 │       │   │                              (SKIP LOCKED + lease), release_leases, lock_awaiting, record_* / cancel /
 │       │   │                              escalate (CAS), find_expired
 │       │   ├── errors.py                  classify_apply_failure: transient / permanent / unclassified (D4)
-│       │   └── db.py                      DbRunner (run_db): semaphore, context copy, SET LOCAL timeouts, hygiene
+│       │   ├── db.py                      DbRunner (run_db): semaphore, context copy, SET LOCAL timeouts, hygiene;
+│       │   │                              [S5] the time of the last committed unit (readiness)
+│       │   └── schema.py                  [S5] pending_migrations (startup probe)
 │       ├── adapters/monolith.py           [S3] DjangoBetDecisionAdapter -> betting / wallets services
 │       ├── transport/ws_client.py         [S4a] one session: connect, token provider (static stub) fetched with a
 │       │                                  timeout, keepalive, library exceptions -> SessionEnded(outcome)
@@ -77,19 +80,23 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 │       │   ├── inbound.py                 reader -> bounded queue -> N appliers
 │       │   ├── decisions.py               use cases through run_db: failure classes, logs, counters
 │       │   ├── sweeper.py                 deadlines -> compensation + CANCEL_PENDING
-│       │   ├── health.py                  [S5] OPS startup / liveness / readiness
+│       │   ├── health.py                  [S5] OPS heartbeats (deadline per beat, park), startup / liveness /
+│       │   │                              readiness, the HTTP server for probes and /metrics
+│       │   ├── shutdown.py                [S5] shutdown request, StopRequested, Drained; the drain is in connection.py
+│       │   ├── logs.py                    [S5] OPS structlog JSON on stdout, stdlib loggers through the same renderer
 │       │   └── metrics.py                 [S4a counters, S5 served] OPS prometheus metrics
-│       ├── management/commands/run_risk_provider.py   [S4a] thin: validate settings, build app, run
+│       ├── management/commands/run_risk_provider.py   [S4a] thin: validate settings, build app, run;
+│       │                                  [S5] logging; SIGTERM/SIGINT -> shutdown request, installed before the slow start
 │       └── tests/                         unit (domain, protocol), integration (persistence on Postgres),
 │                                          runtime (against the fake provider)
 │
 ├── tests/                                 [S3] tests across the monolith and the integration (outside both
-│                                          packages, so the import contracts stay strict); [S4a] runtime scenarios
+│                                          packages, so the import contracts stay strict); [S4a] runtime scenarios;
+│                                          [S5] shutdown and probe scenarios, one test of the command as a process
 ├── tools/fake_provider/                   [S4a] NOT production code, in-process from pytest: server.py (knobs are
 │                                          attributes, so no scenarios.py; [S4b] reject-new, token)
-│                                          [S5: __main__.py for compose]
+│                                          [S5] __main__.py for compose (host, port, reply from env)
 ├── conftest.py                            [S4a] hides ambient RISK_* variables (make exports .env) from every test
-├── deploy/k8s/                            [S5] OPS: deployment.yaml only (replicas 1, probes, resources, grace period, rollout)
 │
 └── docs/
     ├── PROJECT_STRUCTURE.md               this file

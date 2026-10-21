@@ -79,6 +79,10 @@ class ProviderSession:
         except ConnectionClosed as exc:
             raise _ended(exc) from exc
 
+    async def close(self, code: int, reason: str) -> None:
+        """Bounded by `close_timeout`. A session already closed stays as it is."""
+        await self._ws.close(code, reason)
+
     async def closed(self) -> NoReturn:
         """Raises when the connection closes, also while nobody reads it (the reader waits on a full queue)."""
         await self._ws.wait_closed()

@@ -25,6 +25,7 @@ from apps.risk_integration.protocol.close_codes import CLOSE_PLANNED
 from apps.risk_integration.protocol.messages import Decision as WireDecision
 from apps.risk_integration.protocol.messages import OutboundType
 from apps.risk_integration.runtime.decisions import Decisions
+from apps.risk_integration.runtime.health import Heartbeats
 from apps.risk_integration.runtime.sweeper import Sweeper, SweeperSettings
 from apps.risk_integration.tests.tickets_helpers import ago, force, row, state
 from apps.wallets.models import HoldState
@@ -298,6 +299,7 @@ async def test_a_ticket_whose_compensation_keeps_failing_does_not_hold_back_the_
         db,
         Decisions(db, port),
         SweeperSettings(interval=timedelta(milliseconds=10), batch_size=1, retry_failed_after=timedelta(seconds=60)),
+        Heartbeats(timedelta(seconds=60)).loop("sweeper"),
     )
     loop = Running(asyncio.create_task(sweeper.run()))
     try:

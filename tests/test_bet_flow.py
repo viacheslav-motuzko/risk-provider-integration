@@ -2,6 +2,7 @@
 money they move. A unit that fails runs in a savepoint here; the full `run_db` path is in the concurrency tests."""
 
 import json
+from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
 
@@ -38,6 +39,7 @@ from tests.flow_helpers import (
     ODDS_OVER_LIMIT,
     PORT,
     STAKE,
+    applied_state,
     balance,
     bet_state,
     funded_bet,
@@ -91,11 +93,23 @@ def test_accept_captures_the_stake_and_waits_to_confirm(start):
     placed = funded_bet()
     force(placed.ticket_id, state=start)
 
-    assert services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT) == State.CONFIRM_PENDING
+    assert (
+        applied_state(services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT)) == State.CONFIRM_PENDING
+    )
 
     assert (row(placed.ticket_id).state, row(placed.ticket_id).recommendation) == (State.CONFIRM_PENDING, "ACCEPT")
     assert (bet_state(placed.bet_id), hold_state(placed.bet_id)) == (BetState.ACCEPTED, HoldState.CAPTURED)
     assert balance() == FUNDS - STAKE
+
+
+def test_an_applied_decision_reports_how_long_the_customer_waited_on_db_time():
+    placed = funded_bet()
+    force(placed.ticket_id, created_at=ago(3))
+
+    applied = services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT)
+
+    assert applied is not None
+    assert timedelta(seconds=3) <= applied.waited < timedelta(seconds=4)
 
 
 @pytest.mark.parametrize("start", AWAITING)
@@ -103,7 +117,9 @@ def test_decline_rejects_the_bet_and_releases_the_stake(start):
     placed = funded_bet()
     force(placed.ticket_id, state=start)
 
-    assert services.apply_recommendation(PORT, placed.ticket_id, Decision.DECLINE) == State.DECLINE_PENDING
+    assert (
+        applied_state(services.apply_recommendation(PORT, placed.ticket_id, Decision.DECLINE)) == State.DECLINE_PENDING
+    )
 
     assert (row(placed.ticket_id).state, row(placed.ticket_id).recommendation) == (State.DECLINE_PENDING, "DECLINE")
     assert (bet_state(placed.bet_id), hold_state(placed.bet_id)) == (BetState.REJECTED, HoldState.RELEASED)
@@ -113,7 +129,9 @@ def test_decline_rejects_the_bet_and_releases_the_stake(start):
 def test_accept_over_our_limit_is_declined_and_releases_the_stake():
     placed = funded_bet(odds=ODDS_OVER_LIMIT)
 
-    assert services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT) == State.DECLINE_PENDING
+    assert (
+        applied_state(services.apply_recommendation(PORT, placed.ticket_id, Decision.ACCEPT)) == State.DECLINE_PENDING
+    )
 
     ticket = row(placed.ticket_id)
     assert (ticket.state, ticket.recommendation, ticket.decline_reason) == (

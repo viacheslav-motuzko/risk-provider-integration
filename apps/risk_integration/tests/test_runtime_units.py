@@ -1,4 +1,5 @@
 import asyncio
+import json
 import threading
 from collections.abc import Callable, Iterator
 from datetime import timedelta
@@ -13,6 +14,7 @@ from pydantic import SecretStr, ValidationError
 from structlog.testing import capture_logs
 
 from apps.risk_integration.domain import states
+from apps.risk_integration.domain.machine import Trigger
 from apps.risk_integration.domain.states import State
 from apps.risk_integration.management.commands import run_risk_provider
 from apps.risk_integration.persistence import tickets
@@ -20,7 +22,9 @@ from apps.risk_integration.persistence.db import DbRunner
 from apps.risk_integration.protocol import messages
 from apps.risk_integration.protocol.close_codes import SessionOutcome
 from apps.risk_integration.runtime.config import IntegrationSettings
+from apps.risk_integration.runtime.health import Heartbeat, Heartbeats
 from apps.risk_integration.runtime.relay import Relay, RelaySettings
+from apps.risk_integration.runtime.shutdown import Shutdown
 from apps.risk_integration.runtime.supervisor import LoopReturned, supervise
 from apps.risk_integration.tests.tickets_helpers import new_ticket, row, state
 from apps.risk_integration.transport.ws_client import SessionEnded, fetch_token
@@ -140,7 +144,7 @@ def run_db() -> Iterator[DbRunner]:
     runner.shutdown()
 
 
-def make_relay(run_db: DbRunner) -> Relay:
+def make_relay(run_db: DbRunner, heartbeat: Heartbeat | None = None) -> Relay:
     return Relay(
         run_db,
         RelaySettings(
@@ -151,6 +155,7 @@ def make_relay(run_db: DbRunner) -> Relay:
             retransmit_after=timedelta(seconds=5),
             loss_window=timedelta(seconds=40),
         ),
+        heartbeat or Heartbeats(timedelta(seconds=60)).loop("relay"),
     )
 
 
@@ -199,6 +204,49 @@ class TestRelay:
 
         rows = [await run_db(row, tid) for tid in ids]
         assert [(r.state, r.locked_by) for r in rows] == [(State.PENDING_SEND, "")] * 2
+
+
+class _RecordingSession:
+    def __init__(self) -> None:
+        self.types: list[str] = []
+
+    async def send(self, frame: str) -> None:
+        self.types.append(json.loads(frame)["type"])
+
+
+@pytest.mark.django_db(transaction=True)
+class TestFlush:
+    async def test_a_flush_sends_every_final_message_owed_and_no_ticket(self, run_db):
+        pending, confirm, cancel = [await run_db(new_ticket) for _ in range(3)]
+        await run_db(tickets.record_accept, confirm)
+        await run_db(tickets.cancel, cancel, Trigger.TICKET_REFUSED, error_code="BAD")
+        session = _RecordingSession()
+
+        flushed = await asyncio.wait_for(make_relay(run_db).flush(session), WAIT)
+
+        assert (flushed, sorted(session.types)) == (2, ["CONFIRM_RECOMMENDATION", "REQUEST_CANCELLATION"])
+        assert (await run_db(state, confirm), await run_db(state, cancel)) == (State.CONFIRMED, State.CANCELLED)
+        pending_row = await run_db(row, pending)
+        assert (pending_row.state, pending_row.locked_by) == (State.PENDING_SEND, "")
+
+    async def test_a_flush_pages_through_more_than_one_batch(self, run_db):
+        ids = [await run_db(new_ticket) for _ in range(12)]  # the test relay's batch is 10
+        for tid in ids:
+            await run_db(tickets.record_decline, tid)
+
+        assert await asyncio.wait_for(make_relay(run_db).flush(_RecordingSession()), WAIT) == 12
+
+    async def test_a_flush_whose_session_dies_leaves_no_lease_on_the_rest_of_its_batch(self, run_db):
+        ids = [await run_db(new_ticket) for _ in range(3)]
+        for tid in ids:
+            await run_db(tickets.record_accept, tid)
+
+        with pytest.raises(SessionEnded):
+            await asyncio.wait_for(make_relay(run_db).flush(_SessionThatDies(frames=1)), WAIT)
+
+        rows = [await run_db(row, tid) for tid in ids]
+        assert sorted(r.state for r in rows) == [State.CONFIRMED, State.CONFIRM_PENDING, State.CONFIRM_PENDING]
+        assert [r.locked_by for r in rows] == [""] * 3
 
 
 class _HangingTokens:
@@ -258,6 +306,9 @@ def test_the_command_refuses_invalid_settings_without_echoing_values(monkeypatch
 
 
 class _IdleApp:
+    def __init__(self) -> None:
+        self.shutdown = Shutdown()
+
     async def run(self) -> None:
         return None
 
@@ -268,6 +319,7 @@ def test_the_command_warns_when_db_connections_are_not_persistent(monkeypatch, c
     monkeypatch.setenv("RISK_PROVIDER_TOKEN", "s3cr3t")
     monkeypatch.setitem(django_settings.DATABASES["default"], "CONN_MAX_AGE", conn_max_age)
     monkeypatch.setattr(run_risk_provider, "build_app", lambda *_, **__: _IdleApp())
+    monkeypatch.setattr(run_risk_provider, "configure_logging", lambda _: None)  # global; tested on its own
 
     with capture_logs() as logs:
         call_command("run_risk_provider")

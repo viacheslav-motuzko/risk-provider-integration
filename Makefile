@@ -5,7 +5,7 @@ export
 UV ?= uv
 
 .DEFAULT_GOAL := help
-.PHONY: help install lock fmt lint typecheck imports test check mutate db-up db-down migrate run up down makemigrations
+.PHONY: help install lock fmt lint typecheck imports test check mutate db-up db-down migrate run up demo down makemigrations
 
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -54,8 +54,11 @@ makemigrations:  ## Make migrations
 run:  ## Run the integration process locally
 	$(UV) run python manage.py run_risk_provider
 
-up:  ## Full stack in containers (stub until stage 5)
-	docker compose --profile app up --build
+up:  ## Full stack in containers: Postgres, migrations, the fake provider and the integration (probes on :9100)
+	docker compose --profile app up --build --wait
+
+demo:  ## Place demo bets on the running stack; watch `docker compose logs -f app` and :9100/metrics
+	docker compose --profile app exec app python manage.py place_demo_bet --count 5
 
 down:  ## Stop and remove the containers
 	docker compose --profile app down

@@ -16,6 +16,7 @@ from apps.risk_integration.persistence.db import DbRunner
 from apps.risk_integration.persistence.errors import TRANSIENT_DB_ERRORS, transient_kind
 from apps.risk_integration.runtime import metrics
 from apps.risk_integration.runtime.decisions import Decisions
+from apps.risk_integration.runtime.health import Heartbeat
 
 log = structlog.get_logger(__name__)
 
@@ -28,15 +29,17 @@ class SweeperSettings:
 
 
 class Sweeper:
-    def __init__(self, run_db: DbRunner, decisions: Decisions, settings: SweeperSettings) -> None:
+    def __init__(self, run_db: DbRunner, decisions: Decisions, settings: SweeperSettings, heartbeat: Heartbeat) -> None:
         self._run_db = run_db
         self._decisions = decisions
         self._settings = settings
+        self._heartbeat = heartbeat
         # In memory only: a restart forgets it and retries every failed ticket at once, which is harmless.
         self._failed_until: dict[UUID, float] = {}
 
     async def run(self) -> NoReturn:
         while True:
+            self._heartbeat.beat()
             try:
                 expired = await self._run_db(
                     tickets.find_expired, limit=self._settings.batch_size, exclude=self._recently_failed()
@@ -49,7 +52,9 @@ class Sweeper:
             for ticket_id in expired:
                 if not await self._decisions.compensate(ticket_id, Trigger.DEADLINE_PASSED):
                     self._failed_until[ticket_id] = self._now() + self._settings.retry_failed_after.total_seconds()
+                self._heartbeat.beat()
             # Always pause: a full batch of tickets whose compensation keeps failing would otherwise spin.
+            self._heartbeat.beat(extra=self._settings.interval)
             await asyncio.sleep(self._settings.interval.total_seconds())
 
     def _recently_failed(self) -> list[UUID]:

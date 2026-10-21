@@ -19,6 +19,8 @@ CLOSE_PLANNED = 4000  # the provider ends a session at its maximum lifetime
 CLOSE_AUTH_FAILED = 4001
 CLOSE_DISPLACED = 4002
 CLOSE_ALREADY_CONNECTED = 4003  # the provider refuses a second session
+# Ours, when a draining process closes its session (RFC 6455 "going away").
+CLOSE_GOING_AWAY = 1001
 
 _BY_CLOSE_CODE = {
     CLOSE_PLANNED: SessionOutcome.PLANNED,

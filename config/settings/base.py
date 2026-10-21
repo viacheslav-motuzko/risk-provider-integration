@@ -2,9 +2,17 @@ import os
 from datetime import timedelta
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 
-# Configuration comes from environment variables only; a missing required variable fails at import.
-SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
+
+def _required(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ImproperlyConfigured(f"environment variable {name} is not set")
+    return value
+
+
+SECRET_KEY = _required("DJANGO_SECRET_KEY")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 ALLOWED_HOSTS: list[str] = []
 
@@ -49,11 +57,13 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# Per Deployment: web pods keep 0; the integration process has a fixed set of worker threads, so persistent
-# connections give exactly that many steady connections instead of one new connection per unit of work.
+# From the environment, per Deployment. The default is Django's own (0), so this shared module leaves the web pods'
+# connection behaviour as their Deployment configures it. The integration process sets it (about 60 s): its worker
+# threads are fixed, so persistent connections give exactly that many steady connections instead of one per unit
+# of work, and 60 s also rotates them after a database failover.
 DATABASES = {
     "default": dj_database_url.parse(
-        os.environ["DATABASE_URL"],
+        _required("DATABASE_URL"),
         conn_max_age=int(os.environ.get("DATABASE_CONN_MAX_AGE", "0")),
         conn_health_checks=True,
     )
@@ -66,7 +76,6 @@ DATABASES["default"].setdefault("OPTIONS", {}).setdefault(
 )
 
 # The ticket deadline. A Django setting, not an integration setting, because the monolith's web
-# pods create tickets (`risk_integration.api.enqueue_ticket`).
 RISK_TICKET_DEADLINE = timedelta(seconds=float(os.environ.get("RISK_TICKET_DEADLINE_SECONDS", "10")))
 
 LANGUAGE_CODE = "en-us"

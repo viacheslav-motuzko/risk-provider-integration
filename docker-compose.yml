@@ -1,5 +1,9 @@
-# STUB: `db` is real. `app` is a placeholder until stage 5; the fake provider joins in stage 5.
-# Local development only. Credentials below are throwaway defaults for a local container.
+# Local development and the demo only. Credentials below are throwaway defaults for local containers.
+# `make db-up` starts Postgres alone (tests); `make up` adds migrations, the fake provider and the integration.
+x-django-env: &django-env
+  DATABASE_URL: postgres://${POSTGRES_USER:-risk}:${POSTGRES_PASSWORD:-risk}@db:5432/${POSTGRES_DB:-risk}
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-change-me}
+
 services:
   db:
     image: postgres:16
@@ -17,22 +21,45 @@ services:
       timeout: 3s
       retries: 10
 
+  # The release pipeline's job in production: the integration never migrates, its startup probe waits.
+  migrate:
+    profiles: ["app"]
+    build: { context: ., target: app }
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    environment: *django-env
+    depends_on:
+      db: { condition: service_healthy }
+
+  fake-provider:
+    profiles: ["app"]
+    build: { context: ., target: fake-provider }
+    environment:
+      FAKE_PROVIDER_TOKEN: ${RISK_PROVIDER_TOKEN:-dev-token}
+      FAKE_PROVIDER_REPLY: ${FAKE_PROVIDER_REPLY:-ACCEPT}
+    ports:
+      - "8765:8765"
+
   app:
     profiles: ["app"]
-    build: .
+    build: { context: ., target: app }
     depends_on:
-      db:
-        condition: service_healthy
+      migrate: { condition: service_completed_successfully }
+      fake-provider: { condition: service_started }
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-risk}:${POSTGRES_PASSWORD:-risk}@db:5432/${POSTGRES_DB:-risk}
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-change-me}
+      <<: *django-env
+      DATABASE_CONN_MAX_AGE: "60"
       RISK_PROVIDER_URL: ws://fake-provider:8765
       RISK_PROVIDER_ALLOW_PLAINTEXT: "1"
       RISK_PROVIDER_TOKEN: ${RISK_PROVIDER_TOKEN:-dev-token}
     ports:
       - "9100:9100"
-
-  # fake-provider: added in stage 5 (tools/fake_provider)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/readyz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Above the drain budget plus the session close, as terminationGracePeriodSeconds in Kubernetes.
+    stop_grace_period: 30s
 
 volumes:
   pgdata:

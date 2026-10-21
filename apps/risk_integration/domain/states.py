@@ -59,5 +59,7 @@ class MessageRef(StrEnum):
 AWAITING_RECOMMENDATION = frozenset({State.PENDING_SEND, State.SENT})
 # A message is owed to the provider and the relay sends it on its normal path.
 OUTBOX = frozenset({State.PENDING_SEND, State.CONFIRM_PENDING, State.DECLINE_PENDING, State.CANCEL_PENDING})
+# The decision is committed and its final message is owed; a draining process still sends these.
+FINAL_PENDING = OUTBOX - {State.PENDING_SEND}
 # The final message was sent; re-sent after a reconnect within the loss window.
 CLOSED_FINAL = frozenset({State.CONFIRMED, State.DECLINED, State.CANCELLED})

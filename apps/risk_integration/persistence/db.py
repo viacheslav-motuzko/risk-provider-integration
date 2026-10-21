@@ -3,6 +3,7 @@
 import asyncio
 import contextvars
 import functools
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
@@ -43,6 +44,7 @@ class DbRunner:
         self._timeouts = (_ms(statement_timeout), _ms(lock_timeout), _ms(idle_in_transaction_timeout))
         self._await_timeout = await_timeout.total_seconds()
         self._admission_timeout = admission_timeout.total_seconds()
+        self._last_success: float | None = None
 
     async def __call__[**P, T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> T:
         loop = asyncio.get_running_loop()
@@ -64,6 +66,10 @@ class DbRunner:
         except TimeoutError as exc:
             raise OutcomeUnknown(getattr(fn, "__name__", repr(fn))) from exc
 
+    @property
+    def last_success(self) -> float | None:
+        return self._last_success
+
     def shutdown(self) -> None:
         """Wait for running units of work; drop queued ones. Call after the last `run_db` has returned."""
         self._executor.shutdown(wait=True, cancel_futures=True)
@@ -78,7 +84,10 @@ class DbRunner:
                         "set_config('idle_in_transaction_session_timeout', %s, true)",
                         self._timeouts,
                     )
-                return call()
+                result = call()
+
+            self._last_success = time.monotonic()
+            return result
         finally:
             close_old_connections()
 

@@ -72,6 +72,20 @@ def test_claim_takes_every_owed_message_and_due_retransmit_but_nothing_else():
     assert all(row(c.ticket_id).locked_by == B for c in claims)
 
 
+def test_a_draining_flush_claims_only_final_messages_owed_never_a_ticket():
+    new_ticket()
+    sent_ticket(retransmit_after=ZERO)
+    confirm, decline, cancel = new_ticket(), new_ticket(), new_ticket()
+    tickets.record_accept(confirm)
+    tickets.record_decline(decline)
+    tickets.cancel(cancel, Trigger.TICKET_REFUSED, error_code="BAD")
+    RiskTicket.objects.update(locked_by="", locked_until=None)
+
+    claims = tickets.claim_final_pending(owner=B, lease=LEASE, limit=100)
+
+    assert claimed_ids(claims) == {confirm, decline, cancel}
+
+
 def test_a_leased_row_is_not_claimed_again():
     new_ticket()
     assert len(tickets.claim_due(owner=A, lease=LEASE, limit=100)) == 1

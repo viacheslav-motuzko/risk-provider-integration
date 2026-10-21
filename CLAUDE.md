@@ -38,7 +38,7 @@ The stage table is in `docs/kb/stages.md`. Work on one stage at a time and stop 
 
 ## Conventions
 
-- English everywhere: code, comments, docs, commits.
+- English everywhere: code, comments, docs, commits. The one exception is `README.md`, written in Russian from stage 6.
 - Module layout, for review: declarations first (module constants, lookup tables, enums, dataclasses, exceptions), then functions and classes top-down, so a reader meets the outer behaviour first and goes deeper going down the file: public entry points first, then the private helpers they call, in call order.
 - Comments only where the code cannot say it: a non-obvious decision, trade-off or assumption, in short technical words (`# SKIP LOCKED gives no FIFO order; nothing depends on it`). No IDs of decisions, assumptions, questions or table rows (`D5`, `A-07`, `B-01`, `row 8`) in code: a comment must make sense without the docs, which keep the IDs. A guess about the provider is marked `# ASSUMPTION:` so all of them can be found with grep. No narrating comments, no commented-out code. Docstrings only where the signature does not say enough.
 - Full type hints on public functions; ruff and the type checker from the scaffold must pass.

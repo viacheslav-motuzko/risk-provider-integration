@@ -28,6 +28,9 @@ SWEEPER = "apps/risk_integration/runtime/sweeper.py"
 CONNECTION = "apps/risk_integration/runtime/connection.py"
 BACKOFF = "apps/risk_integration/runtime/backoff.py"
 WS_CLIENT = "apps/risk_integration/transport/ws_client.py"
+HEALTH = "apps/risk_integration/runtime/health.py"
+APP = "apps/risk_integration/runtime/app.py"
+COMMAND = "apps/risk_integration/management/commands/run_risk_provider.py"
 
 TIMEOUT_S = 120
 
@@ -372,7 +375,7 @@ MUTATIONS = (
         "backpressure-unlabelled",
         "a session dropped while the inbound queue was full is not told apart",
         CONNECTION,
-        (("queue_full=queue.full()", "queue_full=False"),),
+        (("queue_full=c.queue.full()", "queue_full=False"),),
     ),
     Mutation(
         "planned-not-immediate",
@@ -444,6 +447,125 @@ MUTATIONS = (
         "releasing a batch also frees leases another relay holds",
         TICKETS,
         (("filter(ticket_id__in=ticket_ids, locked_by=owner)", "filter(ticket_id__in=ticket_ids)"),),
+    ),
+    Mutation(
+        "liveness-blind",
+        "liveness never reports a stale loop",
+        HEALTH,
+        (("return LoopState.STALE if deadline < now else LoopState.OK", "return LoopState.OK"),),
+    ),
+    Mutation(
+        "sweeper-silent-on-db-error",
+        "the sweeper beats only after handling a ticket, so a database outage reads as a hung loop",
+        SWEEPER,
+        (
+            ("            self._heartbeat.beat()\n            try:", "            try:"),
+            ("            self._heartbeat.beat(extra=self._settings.interval)\n", ""),
+        ),
+    ),
+    Mutation(
+        "relay-silent-on-db-error",
+        "the relay beats only after a send, so a database outage reads as a hung loop",
+        RELAY,
+        (("                self._heartbeat.beat()\n                try:", "                try:"),),
+    ),
+    Mutation(
+        "ready-while-draining",
+        "a draining pod still reports ready",
+        HEALTH,
+        (
+            (
+                "return self._started and not draining and db_reachable, detail",
+                "return self._started and db_reachable, detail",
+            ),
+        ),
+    ),
+    Mutation(
+        "ready-without-db",
+        "readiness ignores whether the database was reached lately",
+        HEALTH,
+        (("db_reachable = last is not None and self._clock() - last <= self._ready_db_within", "db_reachable = True"),),
+    ),
+    Mutation(
+        "db-success-not-recorded",
+        "the runner never records a committed unit of work, so no pod is ever ready",
+        DB,
+        (("            self._last_success = time.monotonic()\n", ""),),
+    ),
+    Mutation(
+        "start-with-pending-migrations",
+        "the loops start while migrations are pending",
+        APP,
+        (("                if not pending:", "                if True:"),),
+    ),
+    Mutation(
+        "session-ignores-shutdown",
+        "a shutdown request does not stop the session, so the reader and the relay go on",
+        CONNECTION,
+        (('                "stop": shutdown.stop_session,\n', ""),),
+    ),
+    Mutation(
+        "drain-skips-queue",
+        "the drain does not wait for the appliers to finish what was read",
+        CONNECTION,
+        (("            await queue.join()\n", ""),),
+    ),
+    Mutation(
+        "applier-no-task-done",
+        "an applier never marks a message done, so the drain cannot see the queue finish",
+        INBOUND,
+        (("            queue.task_done()\n", "            pass\n"),),
+    ),
+    Mutation(
+        "drain-skips-flush",
+        "the drain does not send the final messages the appliers committed",
+        CONNECTION,
+        (("            flushed = await relay.flush(session)", "            flushed = 0"),),
+    ),
+    Mutation(
+        "flush-sends-tickets",
+        "a draining flush also claims PENDING_SEND tickets",
+        TICKETS,
+        (
+            (
+                "return _claim(Q(state__in=FINAL_PENDING), owner=owner",
+                "return _claim(Q(state__in=FINAL_PENDING | {State.PENDING_SEND}), owner=owner",
+            ),
+        ),
+    ),
+    Mutation(
+        "drain-closes-normally",
+        "a draining process closes its session with 1000 instead of 1001",
+        CONNECTION,
+        (('await session.close(CLOSE_GOING_AWAY, "shutting down")', 'await session.close(1000, "shutting down")'),),
+    ),
+    Mutation(
+        "shutdown-waits-out-backoff",
+        "a shutdown request without a session waits out the reconnect delay",
+        CONNECTION,
+        (
+            (
+                "        await c.shutdown.sleep(delay.total_seconds())",
+                "        await asyncio.sleep(delay.total_seconds())",
+            ),
+        ),
+    ),
+    Mutation(
+        "sigterm-unhandled",
+        "the event loop installs no SIGTERM handler, so SIGTERM exits without a drain",
+        COMMAND,
+        (("        loop.add_signal_handler(sig, app.shutdown.request, sig.name)", "        pass"),),
+    ),
+    Mutation(
+        "decision-time-from-now",
+        "the time to decision is not measured from the ticket's creation",
+        TICKETS,
+        (
+            (
+                'ExpressionWrapper(Now() - F("created_at"), output_field=DurationField())',
+                "ExpressionWrapper(Now() - Now(), output_field=DurationField())",
+            ),
+        ),
     ),
 )
 

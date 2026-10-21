@@ -7,8 +7,11 @@ Seed list from the design discussion and the independent review; verified agains
 - Release that semaphore permit when the worker thread finishes, not when the awaiting coroutine times out: the thread keeps running after the timeout, so releasing early lets more threads than permits run.
 - `loop.run_in_executor` does not copy context variables into the worker (`asyncio.to_thread` does). Copy them in `run_db`, or the log context is lost.
 - Cancelling or timing out an awaited executor call does not stop the thread. The work, including a commit, can still complete afterwards.
+- So a claim can commit after its caller was cancelled and hold rows for a whole lease with nobody to send them. Shield the claim, wait it out on cancellation, release what it took.
 - In a `TaskGroup`, a task that fails cancels its siblings; a task that returns normally cancels nothing. Treat a returning loop as a failure.
 - A task that catches and swallows `CancelledError` makes shutdown hang. Re-raise it.
+- `return`, `break` and `continue` are not allowed in an `except*` block. Re-raise, and catch the plain exception one level up.
+- `asyncio.Queue.join()` waits for one `task_done()` per `get()`: call it in a `finally`, or a failed or cancelled handler blocks the join forever.
 
 ## Django
 - `sync_to_async` defaults to `thread_sensitive=True`, which runs all calls on one thread and serializes DB access. Use the dedicated executor behind `run_db`.
@@ -31,6 +34,8 @@ Seed list from the design discussion and the independent review; verified agains
 - Use `websockets.asyncio.client` and `.server`; the legacy API is deprecated.
 - The incoming queue (`max_queue`, default 16 frames) pauses reading from the transport when full. Pongs are then not read either, and the keepalive (`ping_interval` and `ping_timeout`, 20 s each by default) closes the connection. Keep the reader fast: it only decodes and enqueues.
 - `close_timeout` defaults to 10 s. Count it in the shutdown budget.
+- After a keepalive failure the connection is reported closed only after `close_timeout`, because the peer's close frame cannot be read while the reader is paused. Tests that drop a session through the keepalive must shorten `close_timeout` too.
+- On a server connection, `close_code` is the code received from the client, and 1006 when none was received.
 - A session conflict can surface as an HTTP rejection at the upgrade or as a close frame after the handshake. Classify both.
 - A half-open TCP connection looks alive until a ping times out, and the provider holds its side of the session until it notices too (A-05).
 - Do not retry connects in a tight loop: use backoff with jitter, and keep a logon-rate ceiling in mind (A-12).
@@ -42,10 +47,14 @@ Seed list from the design discussion and the independent review; verified agains
 - With an exec-form `CMD`, Python is PID 1 and ignores SIGTERM until a handler is installed. Install it early or use an init process.
 - `terminationGracePeriodSeconds` must exceed the drain budget plus the WebSocket close timeout.
 - Never label metrics with `ticket_id` or `bet_id`; the cardinality grows without bound.
+- aiohttp as the probe server: `AppRunner(access_log=None)` silences the access log of every probe, `handle_signals=False` leaves SIGTERM to the drain, and `runner.addresses` gives the bound port when the port is 0.
 - During a rolling update two pods overlap. Correctness must not depend on the overlap being absent (invariant 3).
 
 ## Tests
 - A test loop that ends on a DB condition must be bounded, or a bug turns it into a spin that ends at some real deadline.
+- `structlog.testing.capture_logs` and `configure_logging` both change global state. A test that runs the command must stub `configure_logging`, or it rewires root logging for the rest of the session.
+- `MigrationRecorder(connection).record_unapplied(...)` in a test transaction makes a migration pending without touching the schema; the rollback restores it.
+- Prometheus metrics are process-wide: with two app instances in one test, a gauge such as `risk_session_open` shows either instance's value. Assert per instance through behaviour or probes, not through a shared gauge.
 - A test that claims a lock serializes two units of work must observe the second one waiting (`pg_stat_activity.wait_event_type = 'Lock'`, in a bounded loop). Starting both at a barrier passes most runs without the lock.
 
 ## Tooling
@@ -53,5 +62,6 @@ Seed list from the design discussion and the independent review; verified agains
 - `uv.lock` is committed. Run `make lock` once at the start to take the newest compatible versions, then freeze; Docker and CI use `uv sync --frozen`.
 - `lint-imports` fails if a package named in a contract does not exist, so the scaffold creates every subpackage. It squashes external packages to their root (`django`, not `django.db`).
 - `pydantic-settings` pulls in `python-dotenv`. Do not configure `env_file` on settings classes (D10).
+- mypy reports "Missing return" after `try: async with ...` unless the body calls a function typed `NoReturn`.
 - pytest exits with code 5 when no tests are collected; `make test` tolerates that so an empty scaffold passes `make check`.
 - make reads `.env` as plain `KEY=VALUE` lines: no inline comments, no shell quoting tricks. Docker compose reads the same file, and its host-side values (`localhost`) are wrong inside containers, so the compose file sets container-side addresses itself.

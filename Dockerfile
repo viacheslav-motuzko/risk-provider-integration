@@ -1,27 +1,38 @@
-# STUB: finalized in stage 5 (pinned base image and uv version, multi-stage build, probe port).
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1
+# In production this is the monolith's image (one image, two Deployments); here it carries the integration only.
+# Targets: `app` (the default, last) runs the integration; `fake-provider` is the demo stand-in, never deployed.
+ARG PYTHON_IMAGE=python:3.12.11-slim-bookworm
 
-# Pin the uv version in stage 5 for reproducible builds.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    UV_LINK_MODE=copy \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    PATH="/opt/venv/bin:$PATH"
-
+FROM ${PYTHON_IMAGE} AS build
+COPY --from=ghcr.io/astral-sh/uv:0.7.13 /uv /bin/uv
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 WORKDIR /app
-
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
-COPY . .
+FROM ${PYTHON_IMAGE} AS base
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH"
+RUN useradd --system --uid 10001 --no-create-home app
+COPY --from=build /opt/venv /opt/venv
+WORKDIR /app
+COPY manage.py ./
+COPY config ./config
+COPY apps ./apps
+USER 10001
 
-RUN useradd --system --uid 10001 --no-create-home app && chown -R app /app
-USER app
+FROM base AS fake-provider
+COPY tools ./tools
+EXPOSE 8765
+CMD ["python", "-m", "tools.fake_provider"]
 
-# Probes and metrics port (placeholder, see runtime/health.py in stage 5).
+FROM base AS app
+# Probes and metrics.
 EXPOSE 9100
-
+# Exec form, no shell: Python is PID 1 and receives SIGTERM itself. The command installs its handler first.
 CMD ["python", "manage.py", "run_risk_provider"]
