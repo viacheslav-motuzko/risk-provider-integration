@@ -1,4 +1,4 @@
-"""The transition table of `docs/kb/ticket-lifecycle.md`. Persistence builds every conditional update from it."""
+"""The ticket transition table (`docs/kb/ticket-lifecycle.md`). Persistence builds every conditional update from it."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass

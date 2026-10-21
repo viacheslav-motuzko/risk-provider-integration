@@ -6,14 +6,11 @@ paths:
 
 # Async runtime and transport
 
-- Never call the Django ORM here. All database work goes through `run_db` into persistence functions.
-- All loops run under one `TaskGroup`. A task that fails or returns ends the process non-zero; do not catch and continue silently. Never swallow `CancelledError`.
-- Every network and DB operation has an explicit timeout. No unbounded waits. A timed-out `run_db` means "outcome unknown": never act as if it failed; re-read state on the next pass (D5).
-- The reader only decodes frames and puts them into a bounded queue; N appliers do the DB work. Only the relay sends on the socket; it polls, with no in-process wakeup (D2). Appliers do not retry inline: a transient apply failure leaves the ticket `SENT` (D4).
-- The relay retransmits `TICKET` at the retransmit point and for every `SENT` ticket after each (re)connect. After a reconnect it also re-sends every final message sent within the loss window, whatever its type (D11).
-- Every loop bumps its heartbeat on every iteration, including iterations whose DB call failed.
+- Every network and DB wait has an explicit timeout. No unbounded waits except the ones a loop parks on (an empty queue, an open session).
+- Only the relay sends on the socket, and it polls; there is no in-process wakeup. Appliers and the sweeper never send, and they do not retry inline: a transient failure leaves the ticket as it is, for the retransmission or the deadline. The one exception is recording an escalation, retried a few times in place.
+- The relay lives inside each session's group. Every session starts with the re-send: `TICKET` for every `SENT` ticket, then each final message sent within the loss window, at most once per ticket (`final_resends`). It releases the leases of its current batch when its session ends.
+- Liveness: a loop beats on every iteration, also when its DB call failed, and passes its planned wait as `extra`. A loop that waits on something that may last forever calls `park()`. The reader has no heartbeat; the keepalive covers it.
+- Shutdown belongs to the connection task: stop the session group, `queue.join()`, `Relay.flush` (final messages only, never `TICKET`), close with 1001, raise `Drained`. Never wait for recommendations of `SENT` tickets.
+- Session outcomes are `AUTH_FAILED`, `DISPLACED`, `ALREADY_CONNECTED`, `PLANNED`, `TRANSIENT`; the delay per outcome lives in `backoff.py`. A planned close reconnects at once only after a stable session. `AUTH_FAILED` backs off and alerts; it never exits the process.
+- The transport turns every library exception into `SessionEnded(outcome)`; nothing above it imports `websockets`. A new token is fetched, with a timeout, before every connect.
 - Keep the event loop free: no blocking calls, no CPU-heavy work, no sync sleeps.
-- Shutdown: stop claiming `PENDING_SEND`, stop the reader, let the appliers finish the queue, flush `*_PENDING` once, close with 1001; do not wait for recommendations of `SENT` tickets (D8).
-- The access token comes from a token provider before every connect (A-11); a planned provider close (A-14) reconnects at once.
-- Classify connection outcomes into `AUTH_FAILED`, `DISPLACED`, `ALREADY_CONNECTED`, `TRANSIENT`. Reconnect with backoff and jitter. `DISPLACED` never reconnects immediately.
-- Every log line carries `ticket_id`, `bet_id` and `connection_id` where they exist. Count every ignored duplicate, late or unknown message in a metric.

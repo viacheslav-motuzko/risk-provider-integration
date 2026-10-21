@@ -17,7 +17,7 @@ class HoldStateError(Exception):
 
 
 def fund(*, customer_ref: str, currency: str, amount: Decimal) -> None:
-    """Credit a wallet, creating it if needed. For the demo and tests"""
+    """Credit a wallet, creating it if needed. For the demo and tests."""
     with transaction.atomic():
         wallet, _ = Wallet.objects.get_or_create(customer_ref=customer_ref, currency=currency, defaults={"balance": 0})
         Wallet.objects.filter(pk=wallet.pk).update(balance=F("balance") + amount)

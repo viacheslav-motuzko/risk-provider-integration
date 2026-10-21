@@ -66,7 +66,7 @@ def reject_bet(bet_id: int) -> None:
 
 def void_bet(bet_id: int) -> None:
     """Compensation for a failed placement. Idempotent: a bet already voided or rejected stays as it is.
-    Refuses an accepted bet: nothing refunds a captured stake"""
+    Refuses an accepted bet: nothing refunds a captured stake."""
     with transaction.atomic():
         voided = Bet.objects.filter(pk=bet_id, state=BetState.PENDING_RISK).update(state=BetState.VOIDED)
         if not voided:

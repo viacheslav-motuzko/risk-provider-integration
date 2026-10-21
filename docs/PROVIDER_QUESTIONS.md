@@ -8,7 +8,7 @@ Each entry has:
 - **Why it matters**: what goes wrong if we guess wrong.
 - **If different**: what changes in the code. Wire-format guesses live only in `apps/risk_integration/protocol/` (the anti-corruption layer), so most corrections stay in that package.
 
-Code does not carry these IDs: where an assumption matters, the code states it in words, and provider guesses are marked `# ASSUMPTION:`. Environment assumptions (E-xx) are not questions to a counterpart; they are listed in the README.
+Code does not carry these IDs: where an assumption matters, the code states it in words, and provider guesses are marked `# ASSUMPTION:`. Environment assumptions (E-xx) are questions to our own tech lead, not to a counterpart (section 7). Decision IDs (D1-D13) refer to `docs/kb/DECISIONS.md`.
 
 ## 1. Provider: correctness of the ticket flow
 
@@ -90,7 +90,7 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 - **Why it matters**: After a rollout or a crash, the instance that applies the decision may hold a different session than the one that sent the ticket.
 - **If different**: Under session scope, a final message sent on a different session than the ticket's latest `TICKET` would be refused. Waiting tickets are already retransmitted after a reconnect. Tickets that already hold a decision (`*_PENDING`) would need a fresh `TICKET` on the new session and the recommendation again before their final message. That changes the relay and the transition table, not the protocol package.
 
-### A-17. How session outcomes are signalled (new in stage 1)
+### A-17. How session outcomes are signalled
 - **Q**: Which HTTP statuses do you return when refusing the WebSocket upgrade, and which close codes do you use after the handshake? Specifically for: invalid or expired credentials, a second session for the same account, a session closed because another one took over, and a planned close.
 - **Assumed**:
   - At the upgrade: `401` or `403` means authentication failed; `409` means the account already has a session.
@@ -106,9 +106,9 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 - **Q**: What is the frame format (JSON text, binary, field names)? How do we authenticate: static key, token, mTLS? How long does a token live, and can it be refreshed in-band? Is there a sandbox endpoint?
 - **Assumed**: JSON text frames `{type, ticket_id, ts, payload}`, with `ts` in ISO 8601 UTC. A short-lived bearer token (tens of minutes) is obtained from an auth endpoint with client credentials before every connect and sent in the handshake header. There is no in-band refresh. A sandbox exists.
 - **Why it matters**: The token decides how secrets are stored and rotated (D10). The envelope decides how errors are correlated.
-- **If different**: The envelope is one model in `protocol/envelope.py`. A different auth scheme only changes the token provider in the transport (stage 4). We decode tolerantly: unknown fields are ignored, a missing `ts` is accepted (D12: the provider's time never decides anything), binary frames are counted and dropped.
+- **If different**: The envelope is one model in `protocol/envelope.py`. A different auth scheme only changes the token provider in the transport. We decode tolerantly: unknown fields are ignored, a missing `ts` is accepted (D12: the provider's time never decides anything), binary frames are counted and dropped.
 
-### A-16. The `TICKET` payload (new in stage 1)
+### A-16. The `TICKET` payload
 - **Q**: Which fields does `TICKET` require? How are stake, currency and odds encoded? Do you need the customer's identity or only a stable reference? How do you identify the outcome bet on: your IDs or ours? Do `DECLINE_RECOMMENDATION` and `REQUEST_CANCELLATION` take a reason?
 - **Assumed**:
   - One single bet per ticket: `TICKET.payload = {stake, currency, odds, selection_id, customer_ref}`.
@@ -159,3 +159,21 @@ These are not provider facts. They decide what happens to a customer's bet or mo
 - **Q**: How long are ticket rows kept? Do regulatory retention rules for bet records apply to them?
 - **Default**: Kept as long as the bet records. Archiving or partitioning is a next step.
 - **If different**: Partition by creation month. The partial indexes on non-terminal states keep the hot queries fast in any case.
+
+## 7. Environment (E-xx): questions to the tech lead
+
+Nothing is known about the real monolith or the platform it runs on, so these are declared too. Each is a question to our own tech lead, with what changes if the assumption is wrong.
+
+| ID | Question | Assumption and consequence if wrong |
+|----|----------|--------------------------------------|
+| E-01 | Which Python does the monolith run? | 3.12. The floor is 3.11 (`asyncio.TaskGroup`, `asyncio.timeout`); an older monolith cannot host this process without an upgrade |
+| E-02 | Which Django? | 5.2 LTS. Stable ORM APIs only; 4.2 would need a check of `select_for_update(skip_locked=...)` and psycopg 3 support |
+| E-03 | Which Postgres driver? | psycopg 3. All access goes through the Django ORM, so psycopg2 would be a dependency swap |
+| E-04 | Which PostgreSQL? | 14 or newer (`SKIP LOCKED`, `idle_in_transaction_session_timeout`); developed against 16 |
+| E-05 | Do tickets live in the monolith's database? | Yes: the ticket is created in the same transaction as the bet. If the sports domain is extracted, this becomes an outbox plus idempotent consumption |
+| E-06 | Do connections pass through a transaction-mode pooler? | Possibly, so nothing session-level is used: no advisory locks, no `LISTEN/NOTIFY`, no session `SET` (only `SET LOCAL`) |
+| E-07 | Which platform? | Kubernetes with Prometheus-style scraping; secrets delivered as env vars from a Secret |
+| E-08 | Time zone? | UTC with `USE_TZ=True`. Cross-pod comparisons use DB time, so pod clock skew does not matter |
+| E-09 | Does the monolith have idempotent per-bet operations (hold/capture/release, accept/reject/void) without network calls? | Yes; here they are stubs behind `BetDecisionPort`. They run inside the integration's transaction, so a remote call would need a saga |
+| E-10 | Can the database fail over to an asynchronous replica? | Possibly. A failover can lose transactions that were committed and whose messages were already sent; recovery then relies on A-03 and E-09, and reconciliation beyond that is out of scope |
+| E-11 | Who applies migrations? | The release pipeline, before either Deployment rolls out. The integration never migrates; its startup probe stays red while migrations are pending |

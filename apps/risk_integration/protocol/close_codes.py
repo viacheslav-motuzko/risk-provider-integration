@@ -49,5 +49,4 @@ def classify_close(code: int | None) -> SessionOutcome:
 
 
 def classify_handshake_rejection(status: int) -> SessionOutcome:
-    """Classify an HTTP status that refused the WebSocket upgrade."""
     return _BY_HANDSHAKE_STATUS.get(status, SessionOutcome.TRANSIENT)

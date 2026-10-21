@@ -1,4 +1,4 @@
-"""`BetDecisionPort` over the monolith's services"""
+"""`BetDecisionPort` over the monolith's services."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager

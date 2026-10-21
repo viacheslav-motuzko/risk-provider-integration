@@ -41,7 +41,7 @@ def test_refused_upgrade_is_classified(status, outcome):
 
 
 def test_session_conflict_is_recognised_both_at_upgrade_and_as_close_code():
-    # gotchas.md: a conflict can surface either way, and both must lead to the same reconnect policy.
+    # A conflict can surface either way, and both must lead to the same reconnect policy.
     assert classify_handshake_rejection(409) is classify_close(4003) is SessionOutcome.ALREADY_CONNECTED
 
 

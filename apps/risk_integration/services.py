@@ -28,7 +28,7 @@ class Ignored(StrEnum):
 
 
 class LockedTransitionMissed(RuntimeError):
-    """A transition did not apply although the ticket was locked in a source state: a bug, never classified"""
+    """A transition did not apply although the ticket was locked in a source state: a bug, never classified."""
 
 
 def apply_recommendation(port: BetDecisionPort, ticket_id: UUID, decision: Decision) -> Applied | Ignored:

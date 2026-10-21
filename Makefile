@@ -5,7 +5,7 @@ export
 UV ?= uv
 
 .DEFAULT_GOAL := help
-.PHONY: help install lock fmt lint typecheck imports test check mutate db-up db-down migrate run up demo down makemigrations
+.PHONY: help install lock fmt lint typecheck imports test check db-up db-down migrate run up demo down makemigrations
 
 help:  ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -31,13 +31,9 @@ imports:  ## Enforce the dependency rules between packages
 	$(UV) run lint-imports
 
 test:  ## Run tests (needs Postgres: make db-up)
-	@# exit code 5 = no tests collected: tolerated so an empty scaffold passes `make check`
-	$(UV) run pytest; rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 5 ]
+	$(UV) run pytest
 
-check: lint typecheck imports test  ## Everything a stage must pass before its summary
-
-mutate:  ## Sabotage each invariant and check that a test fails (needs Postgres; prints a table)
-	$(UV) run python tools/mutation_check.py
+check: lint typecheck imports test  ## Lint, types, import contracts and tests: what CI runs
 
 db-up:  ## Start Postgres and wait until it is healthy
 	docker compose up -d --wait db

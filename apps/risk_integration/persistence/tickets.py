@@ -69,7 +69,7 @@ class AwaitingTicket:
 
 
 def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta) -> UUID:
-    """Must run in the transaction that creates the bet, so neither exists without the other"""
+    """Must run in the transaction that creates the bet, so neither exists without the other."""
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("create_ticket must run inside the transaction that creates the bet")
     ticket = RiskTicket.objects.create(
@@ -85,7 +85,7 @@ def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta)
 
 
 def claim_due(*, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
-    """The relay's normal pass: every message owed (OUTBOX) and SENT tickets at their retransmit point"""
+    """The relay's normal pass: every message owed (OUTBOX) and SENT tickets at their retransmit point."""
     owed = Q(state__in=FINAL_PENDING) | _before_deadline(State.PENDING_SEND)
     retransmit = _before_deadline(State.SENT) & Q(retransmit_at__lte=Now())
     return _claim(owed | retransmit, owner=owner, lease=lease, limit=limit)
@@ -134,9 +134,8 @@ def lock_awaiting(ticket_id: UUID) -> AwaitingTicket | None:
 
 
 def record_send(ticket_id: UUID, sent_from: State, *, owner: str, retransmit_after: timedelta) -> bool:
-    """The relay sent the message owed in `sent_from` and still holds
-    the lease. A crash before this commit makes the relay send again; the provider
-    deduplicates by `ticket_id`."""
+    """The relay sent the message owed in `sent_from` and still holds the lease. A crash before this commit makes
+    the relay send again; the provider deduplicates by `ticket_id`."""
     trigger = send_trigger(sent_from)
     values: dict[str, Any] = {"last_sent_at": Now()}
     if trigger is Trigger.TICKET_SENT:
@@ -195,7 +194,7 @@ def find_expired(*, limit: int, exclude: Collection[UUID] = ()) -> list[UUID]:
 
 
 def last_final_sent_at() -> datetime | None:
-    """The latest send of a final message."""
+    """The latest send of a final message: where the loss window for the re-send after a reconnect ends."""
     latest: datetime | None = RiskTicket.objects.filter(state__in=CLOSED_FINAL).aggregate(latest=Max("last_sent_at"))[
         "latest"
     ]

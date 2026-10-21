@@ -75,7 +75,7 @@ DATABASES["default"].setdefault("OPTIONS", {}).setdefault(
     "connect_timeout", int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "2"))
 )
 
-# The ticket deadline. A Django setting, not an integration setting, because the monolith's web
+# A Django setting, not an integration setting, because the monolith's web pods create the tickets.
 RISK_TICKET_DEADLINE = timedelta(seconds=float(os.environ.get("RISK_TICKET_DEADLINE_SECONDS", "10")))
 
 LANGUAGE_CODE = "en-us"

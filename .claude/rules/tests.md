@@ -7,11 +7,10 @@ paths:
 
 # Tests and the fake provider
 
-- Use a real PostgreSQL. SQLite cannot test `SKIP LOCKED` or concurrent conditional updates. Do not mock the database.
-- Tests that exercise `run_db`, threads or several processes must use `django_db(transaction=True)`: pytest-django's default per-test transaction is invisible to other connections.
-- Test runtime behavior against the fake provider, not mocked websocket objects.
-- Assert invariants, not coverage: no lost ticket, no double wallet posting, idempotent duplicates, late recommendation ignored, cancellation only after compensation, restart resumes in-flight tickets through retransmission, a timed-out `run_db` whose transaction still commits is handled, a refused cancellation ends in `ESCALATED`, a refused confirm ends in `ESCALATED` with the bet still accepted, a reply that arrives before the relay commits its send is applied.
-- Concurrency tests use real threads or processes against the real DB (two claimers racing for the same rows, two appliers applying a duplicated recommendation).
-- Move time by writing `deadline_at` or `locked_until` in the past or by passing `now`; no real sleeps to wait for deadlines.
-- The fake provider is test tooling, not production code. It runs in-process from pytest with a few knobs per scenario: recommend, silence, duplicate, error replies (incl. a refused confirm and a refused cancellation), reject-new, close. No cross-process e2e suite. Kick-out is covered by a unit test of the close classification.
-- Name tests after the behavior they prove.
+- Tests that touch `run_db`, threads or a second connection use `django_db(transaction=True)`; the default per-test transaction is invisible to other connections. Keep pure unit tests off the database.
+- Concurrency tests use real threads against the real database. A test that claims a lock serializes two units must observe the second one waiting (`pg_stat_activity`), not just start both at a barrier.
+- Runtime behaviour is tested against `tools/fake_provider` over a real socket, configured through its attributes. It is test tooling, not production code; `__main__.py` runs it for docker compose.
+- Move time by writing `deadline_at`, `retransmit_at` or `locked_until` into the past on DB time (`tickets_helpers`), never by sleeping. Every wait is bounded (`WAIT`) and watches the app task, so a crash fails with its own error.
+- `test_command_process.py` is the only test that starts the command as a process; keep it the only one.
+- A test that runs the command stubs `configure_logging`, which rewires global logging.
+- Name tests after the behaviour they prove, and assert invariants: no lost ticket, no double wallet posting, compensation before cancellation, duplicates and late messages ignored.

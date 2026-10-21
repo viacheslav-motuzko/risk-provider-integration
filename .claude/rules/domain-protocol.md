@@ -6,8 +6,8 @@ paths:
 
 # Domain and protocol packages
 
-- `domain` imports the standard library only: no Django, asyncio, websockets or pydantic.
-- `protocol` imports the standard library and pydantic only: no Django, no ORM, no sockets.
-- State changes go only through the transition table in `domain/machine.py`. Transition functions are pure and receive `now` as an argument; they never read a clock (D12).
-- Malformed, unknown or unexpected frames produce typed errors; the caller decides what to do. Never raise bare exceptions from the codec.
-- The protocol layer is the anti-corruption layer for provider assumptions: every guess about the provider's wire format lives here and is marked `# ASSUMPTION:` with the guess in words (no ID), so a wrong guess is found and fixed in one place.
+- `domain` imports the standard library only; `protocol` the standard library and pydantic only (import-linter enforces both).
+- State changes go only through the transition table in `domain/machine.py`. The domain never reads a clock: deadlines and leases are compared in SQL on DB time.
+- The reason enums exist in both packages with the same spelling; the runtime maps them by value. Change both together.
+- Malformed, unknown or unexpected frames raise `FrameError` with a bounded `kind`; the codec raises nothing else. Inbound models ignore unknown fields; outbound models forbid them.
+- `protocol` is the anti-corruption layer: every guess about the provider's wire format lives here, marked `# ASSUMPTION:`, so a wrong guess is fixed in one place.

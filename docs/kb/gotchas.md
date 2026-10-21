@@ -1,6 +1,6 @@
 # Gotchas
 
-Seed list from the design discussion and the independent review; verified against Python 3.12/3.13, Django 5.2, websockets 17 and the Postgres docs, but re-check against the installed versions before relying on one. Extend through the stages: propose new entries in the stage summary, and add them here once the user approves.
+Pitfalls met or verified while building this, against Python 3.12, Django 5.2, websockets 17 and PostgreSQL 16. Re-check against the installed versions before relying on one.
 
 ## Python and asyncio
 - `ThreadPoolExecutor` has an unbounded work queue: `max_workers` limits concurrency, not admission. Bound admission with a semaphore.
@@ -63,5 +63,4 @@ Seed list from the design discussion and the independent review; verified agains
 - `lint-imports` fails if a package named in a contract does not exist, so the scaffold creates every subpackage. It squashes external packages to their root (`django`, not `django.db`).
 - `pydantic-settings` pulls in `python-dotenv`. Do not configure `env_file` on settings classes (D10).
 - mypy reports "Missing return" after `try: async with ...` unless the body calls a function typed `NoReturn`.
-- pytest exits with code 5 when no tests are collected; `make test` tolerates that so an empty scaffold passes `make check`.
 - make reads `.env` as plain `KEY=VALUE` lines: no inline comments, no shell quoting tricks. Docker compose reads the same file, and its host-side values (`localhost`) are wrong inside containers, so the compose file sets container-side addresses itself.

@@ -126,7 +126,7 @@ source_modules = [
     "apps.risk_integration.transport",
 ]
 forbidden_modules = ["django", "apps.risk_integration.models"]
-# Direct imports only: runtime reaches the ORM through persistence via run_db (design-topics.md).
+# Direct imports only: runtime reaches the ORM through persistence via run_db.
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
@@ -135,10 +135,8 @@ type = "forbidden"
 source_modules = ["apps.betting", "apps.wallets"]
 forbidden_modules = ["apps.risk_integration"]
 allow_indirect_imports = true
-unmatched_ignore_imports_alerting = "none"  # these imports appear only from stage 3 on
 ignore_imports = [
     "apps.betting.** -> apps.risk_integration.api",
-    "apps.wallets.** -> apps.risk_integration.api",
 ]
 
 [[tool.importlinter.contracts]]
@@ -147,7 +145,6 @@ type = "forbidden"
 source_modules = ["apps.risk_integration"]
 forbidden_modules = ["apps.betting", "apps.wallets"]
 allow_indirect_imports = true
-unmatched_ignore_imports_alerting = "none"  # these imports appear only from stage 3 on
 ignore_imports = [
     "apps.risk_integration.adapters.monolith -> apps.betting.**",
     "apps.risk_integration.adapters.monolith -> apps.wallets.**",

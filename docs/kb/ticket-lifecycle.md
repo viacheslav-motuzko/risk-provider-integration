@@ -1,6 +1,6 @@
 # Ticket lifecycle
 
-Revised at the stage 1 gate: B-01 escalates instead of voiding, apply failures have three classes, replies may beat the relay's own commit, final messages are re-sent uniformly (D11). The transition table is implemented in `domain/machine.py` (stage 2), which adds one self-loop trigger, `FINAL_RESENT`, for the re-send of a final message after a reconnect.
+The transition table is implemented in `domain/machine.py`, which adds one self-loop trigger, `FINAL_RESENT`, for the re-send of a final message after a reconnect. Decision IDs refer to `DECISIONS.md`, assumption IDs to `docs/PROVIDER_QUESTIONS.md`.
 
 ```
 PENDING_SEND -> SENT -> CONFIRM_PENDING -> CONFIRMED
@@ -16,7 +16,7 @@ Compensation means: void the bet and release the held stake, in the same transac
 
 Every transition is a conditional update on the listed source states (plus the lease owner for the relay's send transitions), runs in one transaction together with its side effects, and clears the lease. A miss is a normal outcome: logged and counted, never an exception.
 
-Rows 4-6 and 8-10 move money. Their unit of work locks the ticket in its source states first (which also yields `bet_id`), lets the monolith decide and apply through the port, then commits the transition (`services.py`, stage 3). A duplicate or a racing cancellation waits for the lock and then finds nothing to do.
+Rows 4-6 and 8-10 move money. Their unit of work locks the ticket in its source states first (which also yields `bet_id`), lets the monolith decide and apply through the port, then commits the transition (`services.py`). A duplicate or a racing cancellation waits for the lock and then finds nothing to do.
 
 A reply can arrive before the relay has committed the transition for the frame it just sent (the relay sends, then commits). So every reply-driven transition also accepts the state before that send: `PENDING_SEND` for replies to `TICKET`, `CONFIRM_PENDING` for replies to a confirm, `CANCEL_PENDING` for replies to a cancellation. The relay's own commit then misses, which is a normal outcome. Without this, a fast reply would be dropped as unexpected and, for a refused confirm, the exposure mismatch would go unnoticed.
 
@@ -44,7 +44,7 @@ Ignored, logged and counted (no transition):
 - An `ERROR` about a cancellation with code `UNKNOWN_TICKET`: the cancellation counts as done (A-09).
 - Any other combination, an `ERROR` without `ticket_id`, and messages for unknown tickets.
 
-The sweeper never touches `CONFIRM_PENDING` or `DECLINE_PENDING`: the decision is applied locally, and only its delivery is pending. A `*_PENDING` row that cannot be sent (no session) stays pending; the age of the oldest one is a metric with an alert. There is no attempt counter.
+The sweeper never touches `CONFIRM_PENDING` or `DECLINE_PENDING`: the decision is applied locally, and only its delivery is pending. A `*_PENDING` row that cannot be sent (no session) stays pending; its age is visible to a SQL exporter (D8). There is no attempt counter.
 
 ## Relay, leases and re-send
 
