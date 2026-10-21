@@ -173,4 +173,5 @@ def _runner() -> DbRunner:
         lock_timeout=timedelta(seconds=1),
         idle_in_transaction_timeout=timedelta(seconds=WAIT),
         await_timeout=timedelta(seconds=WAIT),
+        admission_timeout=timedelta(seconds=WAIT),
     )

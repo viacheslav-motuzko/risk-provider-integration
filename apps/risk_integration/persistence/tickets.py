@@ -7,6 +7,7 @@ it applied. A miss (duplicate, late reply, lost lease) is a normal outcome for t
 Monolith side effects run in the same transaction, under the lock taken by `lock_awaiting` (`services.py`).
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -14,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from django.db import connection, transaction
-from django.db.models import DateTimeField, DurationField, ExpressionWrapper, Q, Value
+from django.db.models import DateTimeField, DurationField, ExpressionWrapper, Max, Q, Value
 from django.db.models.expressions import CombinedExpression
 from django.db.models.functions import Now
 
@@ -157,10 +158,20 @@ def escalate(ticket_id: UUID, trigger: Trigger, *, error_code: str) -> bool:
     )
 
 
-def find_expired(*, limit: int) -> list[UUID]:
-    """Tickets still waiting for a recommendation at their deadline, for the sweeper."""
+def find_expired(*, limit: int, exclude: Collection[UUID] = ()) -> list[UUID]:
+    """Tickets still waiting for a recommendation at their deadline, for the sweeper, oldest first."""
     due = Q(state__in=AWAITING_RECOMMENDATION, deadline_at__lte=Now())
+    if exclude:
+        due &= ~Q(ticket_id__in=exclude)
     return list(RiskTicket.objects.filter(due).order_by("deadline_at").values_list("ticket_id", flat=True)[:limit])
+
+
+def last_final_sent_at() -> datetime | None:
+    """The latest send of a final message."""
+    latest: datetime | None = RiskTicket.objects.filter(state__in=CLOSED_FINAL).aggregate(latest=Max("last_sent_at"))[
+        "latest"
+    ]
+    return latest
 
 
 def db_now() -> datetime:

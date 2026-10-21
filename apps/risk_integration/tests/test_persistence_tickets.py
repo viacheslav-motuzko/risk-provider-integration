@@ -274,6 +274,16 @@ def test_final_messages_sent_within_the_loss_window_are_resent_whatever_their_ty
     assert again == []
 
 
+def test_the_loss_window_of_a_new_process_ends_at_the_latest_final_send_and_ignores_open_tickets():
+    assert tickets.last_final_sent_at() is None
+    older, latest, still_sent = new_ticket(), new_ticket(), sent_ticket()
+    force(older, state=State.CONFIRMED, last_sent_at=ago(600))
+    force(latest, state=State.DECLINED, last_sent_at=ago(300))
+    force(still_sent, last_sent_at=ago(0))
+
+    assert tickets.last_final_sent_at() == row(latest).last_sent_at
+
+
 def test_database_refuses_a_cancellation_without_a_reason():
     tid = new_ticket()
     with pytest.raises(IntegrityError), transaction.atomic():

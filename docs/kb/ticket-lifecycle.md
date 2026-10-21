@@ -35,8 +35,8 @@ A reply can arrive before the relay has committed the transition for the frame i
 | 11 | `CONFIRM_PENDING` | relay sent confirm | `CONFIRMED` | `last_sent_at` |
 | 12 | `DECLINE_PENDING` | relay sent decline | `DECLINED` | `last_sent_at` |
 | 13 | `CANCEL_PENDING` | relay sent cancellation | `CANCELLED` | `last_sent_at` |
-| 14 | `CONFIRM_PENDING`, `CONFIRMED` | `ERROR` with `ref_type = CONFIRM_RECOMMENDATION` (refused or late, A-10) | `ESCALATED` | `last_error_*`, `escalation_reason = CONFIRM_REJECTED`. The bet stays accepted: no void, no refund (B-01) |
-| 15 | `CANCEL_PENDING`, `CANCELLED` | `ERROR` with `ref_type = REQUEST_CANCELLATION`, code other than `UNKNOWN_TICKET` | `ESCALATED` | `last_error_*`, `escalation_reason = CANCEL_REJECTED` (A-09, B-03) |
+| 14 | `CONFIRM_PENDING`, `CONFIRMED` | `ERROR` with `ref_type = CONFIRM_RECOMMENDATION` (refused or late, A-10) | `ESCALATED` | `last_error_*`, `escalation_reason = CONFIRM_REJECTED`. The bet stays accepted: no void, no refund (B-01). Retried in place on a transient DB error, the one exception to no inline retry: the provider does not repeat an error (D4) |
+| 15 | `CANCEL_PENDING`, `CANCELLED` | `ERROR` with `ref_type = REQUEST_CANCELLATION`, code other than `UNKNOWN_TICKET` | `ESCALATED` | `last_error_*`, `escalation_reason = CANCEL_REJECTED` (A-09, B-03). Retried in place like row 14 (D4) |
 
 Ignored, logged and counted (no transition):
 - A `RECOMMENDATION` in any state other than `PENDING_SEND` or `SENT`: a duplicate, or late after the deadline cancellation or another cancellation (D11). Between the deadline and the sweeper's pass the ticket is still `SENT` and the recommendation is applied.

@@ -14,12 +14,16 @@ class OutcomeUnknown(Exception):
     """The caller stopped waiting, but the unit of work may still commit. Re-read state before acting."""
 
 
+class NotAdmitted(Exception):
+    """No permit within the admission timeout. The unit of work never started, so nothing needs re-reading."""
+
+
 class DbRunner:
     """Runs sync DB functions from the event loop: `await run_db(fn, *args)`.
 
     Each call is one transaction with `SET LOCAL` timeouts on a worker thread. Admission is bounded by a
     semaphore whose permit is released when the worker thread finishes, not when the caller stops waiting, so
-    at most `max_workers` units of work are ever running or queued.
+    at most `max_workers` units of work are ever running or queued. The wait for a permit is bounded too.
     """
 
     def __init__(
@@ -30,6 +34,7 @@ class DbRunner:
         lock_timeout: timedelta,
         idle_in_transaction_timeout: timedelta,
         await_timeout: timedelta,
+        admission_timeout: timedelta,
     ) -> None:
         if await_timeout <= statement_timeout:
             raise ValueError("await_timeout must exceed statement_timeout")
@@ -37,12 +42,16 @@ class DbRunner:
         self._permits = asyncio.Semaphore(max_workers)
         self._timeouts = (_ms(statement_timeout), _ms(lock_timeout), _ms(idle_in_transaction_timeout))
         self._await_timeout = await_timeout.total_seconds()
+        self._admission_timeout = admission_timeout.total_seconds()
 
     async def __call__[**P, T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> T:
         loop = asyncio.get_running_loop()
-        await self._permits.acquire()
         try:
-            # run_in_executor would not copy context variables (log context) into the worker.
+            async with asyncio.timeout(self._admission_timeout):
+                await self._permits.acquire()
+        except TimeoutError as exc:
+            raise NotAdmitted(getattr(fn, "__name__", repr(fn))) from exc
+        try:
             ctx = contextvars.copy_context()
             work: Future[T] = self._executor.submit(ctx.run, self._unit_of_work, functools.partial(fn, *args, **kwargs))
         except BaseException:

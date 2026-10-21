@@ -128,7 +128,7 @@ def test_outbound_messages_are_immutable():
     message = ConfirmRecommendation(ticket_id=TICKET_ID)
 
     with pytest.raises(ValidationError):
-        message.ticket_id = uuid4()
+        message.ticket_id = uuid4()  # type: ignore[misc]  # the write the model must refuse
 
 
 # Inbound

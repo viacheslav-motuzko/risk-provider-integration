@@ -63,23 +63,29 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 │       │   ├── errors.py                  classify_apply_failure: transient / permanent / unclassified (D4)
 │       │   └── db.py                      DbRunner (run_db): semaphore, context copy, SET LOCAL timeouts, hygiene
 │       ├── adapters/monolith.py           [S3] DjangoBetDecisionAdapter -> betting / wallets services
-│       ├── transport/ws_client.py         [S4] connect, token provider (static stub), keepalive, close classification
-│       ├── runtime/                       [S4] async; never touches the ORM directly
+│       ├── transport/ws_client.py         [S4a] one session: connect, token provider (static stub), keepalive,
+│       │                                  library exceptions -> SessionEnded(outcome)
+│       ├── runtime/                       [S4a] async; never touches the ORM directly
 │       │   ├── app.py                     composition root (manual wiring)
-│       │   ├── config.py, clock.py
-│       │   ├── supervisor.py              TaskGroup, fail-fast, shutdown orchestration
-│       │   ├── relay.py                   outbox sender (the only sender on the socket), retransmission
-│       │   ├── inbound.py                 reader -> bounded queue -> N appliers; one DB transaction per message, CAS
+│       │   ├── config.py                  RISK_* settings (pydantic-settings)
+│       │   ├── supervisor.py              TaskGroup, fail-fast, a returning loop is a failure
+│       │   ├── connection.py              the session group: reader, relay, socket watch [S4b: reconnect, backoff]
+│       │   ├── relay.py                   outbox sender (the only sender on the socket), retransmission, re-send
+│       │   │                              at the start of every session
+│       │   ├── inbound.py                 reader -> bounded queue -> N appliers
+│       │   ├── decisions.py               use cases through run_db: failure classes, logs, counters
 │       │   ├── sweeper.py                 deadlines -> compensation + CANCEL_PENDING
 │       │   ├── health.py                  [S5] OPS startup / liveness / readiness
-│       │   └── metrics.py                 [S5] OPS prometheus metrics
-│       ├── management/commands/run_risk_provider.py   [S4] thin: build app, run supervisor
+│       │   └── metrics.py                 [S4a counters, S5 served] OPS prometheus metrics
+│       ├── management/commands/run_risk_provider.py   [S4a] thin: validate settings, build app, run
 │       └── tests/                         unit (domain, protocol), integration (persistence on Postgres),
 │                                          runtime (against the fake provider)
 │
 ├── tests/                                 [S3] tests across the monolith and the integration (outside both
-│                                          packages, so the import contracts stay strict)
-├── tools/fake_provider/                   [S4] NOT production code, in-process from pytest: server.py, scenarios.py, __main__.py
+│                                          packages, so the import contracts stay strict); [S4a] runtime scenarios
+├── tools/fake_provider/                   [S4a] NOT production code, in-process from pytest: server.py (knobs are
+│                                          attributes, so no scenarios.py) [S5: __main__.py for compose]
+├── conftest.py                            [S4a] hides ambient RISK_* variables (make exports .env) from every test
 ├── deploy/k8s/                            [S5] OPS: deployment.yaml only (replicas 1, probes, resources, grace period, rollout)
 │
 └── docs/

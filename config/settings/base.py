@@ -49,7 +49,21 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {"default": dj_database_url.parse(os.environ["DATABASE_URL"], conn_max_age=0)}
+# Per Deployment: web pods keep 0; the integration process has a fixed set of worker threads, so persistent
+# connections give exactly that many steady connections instead of one new connection per unit of work.
+DATABASES = {
+    "default": dj_database_url.parse(
+        os.environ["DATABASE_URL"],
+        conn_max_age=int(os.environ.get("DATABASE_CONN_MAX_AGE", "0")),
+        conn_health_checks=True,
+    )
+}
+# Without it psycopg waits 130 s on an unreachable host while the worker thread holds a run_db permit. 2 s is the
+# minimum psycopg honours and stays below the integration's await timeout, so a failed connect surfaces as a
+# transient error rather than as an unknown outcome. A value in DATABASE_URL wins.
+DATABASES["default"].setdefault("OPTIONS", {}).setdefault(
+    "connect_timeout", int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "2"))
+)
 
 # The ticket deadline. A Django setting, not an integration setting, because the monolith's web
 # pods create tickets (`risk_integration.api.enqueue_ticket`).

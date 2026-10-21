@@ -11,8 +11,8 @@ from apps.risk_integration.domain.errors import PermanentApplyError
 from apps.risk_integration.domain.states import State
 from apps.risk_integration.models import RiskTicket
 from apps.risk_integration.persistence import tickets
-from apps.risk_integration.persistence.db import DbRunner, OutcomeUnknown
-from apps.risk_integration.persistence.errors import ApplyFailure, classify_apply_failure
+from apps.risk_integration.persistence.db import DbRunner, NotAdmitted, OutcomeUnknown
+from apps.risk_integration.persistence.errors import ApplyFailure, classify_apply_failure, transient_kind
 from apps.risk_integration.tests.tickets_helpers import new_ticket, state
 
 WAIT = 5  # seconds; only bounds a hang, never waited out in a passing run
@@ -20,13 +20,19 @@ WAIT = 5  # seconds; only bounds a hang, never waited out in a passing run
 request_id = contextvars.ContextVar[str]("request_id")
 
 
-def runner(*, max_workers: int = 2, await_timeout: timedelta = timedelta(seconds=2)) -> DbRunner:
+def runner(
+    *,
+    max_workers: int = 2,
+    await_timeout: timedelta = timedelta(seconds=2),
+    admission_timeout: timedelta = timedelta(seconds=WAIT),
+) -> DbRunner:
     return DbRunner(
         max_workers=max_workers,
         statement_timeout=timedelta(milliseconds=200),
         lock_timeout=timedelta(milliseconds=150),
         idle_in_transaction_timeout=timedelta(seconds=WAIT),
         await_timeout=await_timeout,
+        admission_timeout=admission_timeout,
     )
 
 
@@ -76,6 +82,29 @@ class TestRunDb:
         finally:
             run_db.shutdown()
         assert classify_apply_failure(exc_info.value) is ApplyFailure.TRANSIENT
+        assert transient_kind(exc_info.value) == "statement_timeout"
+
+    async def test_a_wait_on_the_ticket_lock_past_lock_timeout_has_its_own_label(self):
+        run_db = runner()
+        tid = await run_db(new_ticket)
+        locked, finish = threading.Event(), threading.Event()
+
+        def hold_the_lock():
+            tickets.lock_awaiting(tid)
+            locked.set()
+            assert finish.wait(WAIT)
+
+        try:
+            holder = asyncio.create_task(run_db(hold_the_lock))
+            assert await asyncio.to_thread(locked.wait, WAIT)
+            with pytest.raises(OperationalError) as exc_info:
+                await run_db(tickets.lock_awaiting, tid)
+            finish.set()
+            await asyncio.wait_for(holder, WAIT)
+        finally:
+            finish.set()
+            run_db.shutdown()
+        assert transient_kind(exc_info.value) == "lock_timeout"
 
     async def test_context_variables_reach_the_worker_thread(self):
         run_db = runner()
@@ -126,6 +155,22 @@ class TestRunDb:
             finish.set()
             run_db.shutdown()
 
+    async def test_the_wait_for_admission_is_bounded_and_the_refused_work_never_runs(self):
+        run_db = runner(max_workers=1, admission_timeout=timedelta(milliseconds=200))
+        finish = threading.Event()
+        ran = threading.Event()
+        try:
+            busy = asyncio.create_task(run_db(finish.wait, WAIT))
+            await asyncio.sleep(0)  # let it take the only permit
+            with pytest.raises(NotAdmitted):
+                await run_db(ran.set)
+            finish.set()
+            assert await asyncio.wait_for(busy, WAIT) is True
+            assert not ran.is_set()
+        finally:
+            finish.set()
+            run_db.shutdown()
+
     def test_await_timeout_must_exceed_statement_timeout(self):
         with pytest.raises(ValueError, match="await_timeout"):
             runner(await_timeout=timedelta(milliseconds=200))
@@ -145,8 +190,9 @@ class TestApplyFailureClassification:
     def test_broken_monolith_invariant_is_permanent(self):
         assert classify_apply_failure(PermanentApplyError("hold missing")) is ApplyFailure.PERMANENT
 
-    def test_unknown_outcome_is_transient(self):
+    def test_unknown_outcome_and_refused_admission_are_transient(self):
         assert classify_apply_failure(OutcomeUnknown("apply")) is ApplyFailure.TRANSIENT
+        assert classify_apply_failure(NotAdmitted("apply")) is ApplyFailure.TRANSIENT
 
     def test_bugs_stay_unclassified_so_the_process_fails_fast(self):
         with pytest.raises(ProgrammingError) as programming, transaction.atomic():

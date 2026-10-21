@@ -20,6 +20,11 @@ ADAPTER = "apps/risk_integration/adapters/monolith.py"
 SERVICES = "apps/risk_integration/services.py"
 BETTING = "apps/betting/services.py"
 WALLETS = "apps/wallets/services.py"
+RELAY = "apps/risk_integration/runtime/relay.py"
+DECISIONS = "apps/risk_integration/runtime/decisions.py"
+INBOUND = "apps/risk_integration/runtime/inbound.py"
+SUPERVISOR = "apps/risk_integration/runtime/supervisor.py"
+SWEEPER = "apps/risk_integration/runtime/sweeper.py"
 
 TIMEOUT_S = 120
 
@@ -168,7 +173,12 @@ MUTATIONS = (
         "operational-unclassified",
         "OperationalError is not transient",
         ERRORS,
-        (("OutcomeUnknown | OperationalError | InterfaceError", "OutcomeUnknown | InterfaceError"),),
+        (
+            (
+                "(OutcomeUnknown, NotAdmitted, OperationalError, InterfaceError)",
+                "(OutcomeUnknown, NotAdmitted, InterfaceError)",
+            ),
+        ),
     ),
     Mutation(
         "apply-without-lock",
@@ -238,6 +248,116 @@ MUTATIONS = (
         "the adapter does not turn a broken monolith invariant into PermanentApplyError",
         ADAPTER,
         (("    except (betting.BetStateError, HoldStateError) as exc:", "    except PermanentApplyError as exc:"),),
+    ),
+    Mutation(
+        "admission-unbounded",
+        "the wait for a run_db permit is not bounded",
+        DB,
+        (("async with asyncio.timeout(self._admission_timeout):", "async with asyncio.timeout(None):"),),
+    ),
+    Mutation(
+        "not-admitted-unclassified",
+        "a refused admission is not transient (fails the process)",
+        ERRORS,
+        (
+            (
+                "(OutcomeUnknown, NotAdmitted, OperationalError, InterfaceError)",
+                "(OutcomeUnknown, OperationalError, InterfaceError)",
+            ),
+        ),
+    ),
+    Mutation(
+        "lock-timeout-unlabelled",
+        "a wait on the ticket lock past lock_timeout reads as a database error",
+        ERRORS,
+        (("    if isinstance(exc.__cause__, pg.LockNotAvailable):", "    if False:"),),
+    ),
+    Mutation(
+        "resend-skipped",
+        "a new session does not re-send what the previous one may have lost",
+        RELAY,
+        (("                    resend = await self._resend_owed()\n", "                    resend = deque()\n"),),
+    ),
+    Mutation(
+        "loss-window-from-connect",
+        "the final re-send window ends at the connect, not at the last final send",
+        RELAY,
+        (("window_start=last_final - settings.loss_window", "window_start=since - settings.loss_window"),),
+    ),
+    Mutation(
+        "commit-before-send",
+        "the send is committed without waiting for the frame to be written",
+        RELAY,
+        (
+            (
+                "            await session.send(encode(message, ts=datetime.now(UTC)))",
+                "            asyncio.ensure_future(session.send(encode(message, ts=datetime.now(UTC))))",
+            ),
+        ),
+    ),
+    Mutation(
+        "transient-compensates",
+        "a transient apply failure compensates and cancels instead of waiting for the retransmission",
+        DECISIONS,
+        (("                if failure is ApplyFailure.TRANSIENT:\n", "                if False:\n"),),
+    ),
+    Mutation(
+        "unclassified-swallowed",
+        "an unclassified apply failure is swallowed instead of ending the process",
+        DECISIONS,
+        (
+            (
+                "                    raise\n                if failure is ApplyFailure.TRANSIENT:",
+                "                    return\n                if failure is ApplyFailure.TRANSIENT:",
+            ),
+        ),
+    ),
+    Mutation(
+        "permanent-not-compensated",
+        "a permanent apply failure leaves the stake held instead of compensating",
+        DECISIONS,
+        (("                await self.compensate(ticket_id, Trigger.APPLY_FAILED)\n", "                pass\n"),),
+    ),
+    Mutation(
+        "refused-ticket-escalates",
+        "a refused TICKET is escalated instead of compensated",
+        INBOUND,
+        (("    elif trigger is Trigger.TICKET_REFUSED:", "    elif False:"),),
+    ),
+    Mutation(
+        "refusal-ignored",
+        "a refused confirm or cancellation is not escalated",
+        INBOUND,
+        (("        await decisions.escalate(error.ticket_id, trigger, error_code=error.code)\n", "        pass\n"),),
+    ),
+    Mutation(
+        "returning-loop-ok",
+        "a loop that returns is not treated as a failure",
+        SUPERVISOR,
+        (("    await loop()\n    raise LoopReturned(name)\n", "    await loop()\n"),),
+    ),
+    Mutation(
+        "deadline-ignored",
+        "the sweeper finds expired tickets but does not cancel them",
+        SWEEPER,
+        (
+            (
+                "                if not await self._decisions.compensate(ticket_id, Trigger.DEADLINE_PASSED):\n",
+                "                if False:\n",
+            ),
+        ),
+    ),
+    Mutation(
+        "failed-compensation-starves",
+        "the sweeper keeps picking tickets whose compensation just failed, ahead of the ones behind them",
+        SWEEPER,
+        (("exclude=self._recently_failed()", "exclude=()"),),
+    ),
+    Mutation(
+        "escalation-not-retried",
+        "a transient failure of an escalation gives up at once (the provider does not repeat its error)",
+        DECISIONS,
+        (("if attempt >= self._escalation_attempts:", "if True:"),),
     ),
 )
 

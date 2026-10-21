@@ -26,8 +26,9 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-risk}:${POSTGRES_PASSWORD:-risk}@db:5432/${POSTGRES_DB:-risk}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-change-me}
-      PROVIDER_WS_URL: ws://fake-provider:8765
-      PROVIDER_WS_TOKEN: ${PROVIDER_WS_TOKEN:-dev-token}
+      RISK_PROVIDER_URL: ws://fake-provider:8765
+      RISK_PROVIDER_ALLOW_PLAINTEXT: "1"
+      RISK_PROVIDER_TOKEN: ${RISK_PROVIDER_TOKEN:-dev-token}
     ports:
       - "9100:9100"
 
