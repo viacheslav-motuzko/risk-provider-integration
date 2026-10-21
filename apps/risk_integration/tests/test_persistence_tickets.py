@@ -78,6 +78,21 @@ def test_a_leased_row_is_not_claimed_again():
     assert tickets.claim_due(owner=B, lease=LEASE, limit=100) == []
 
 
+def test_releasing_a_batch_frees_only_its_own_leases_and_leaves_recorded_rows_alone():
+    mine, recorded, other_batch = new_ticket(), new_ticket(), new_ticket()
+    tickets.claim_due(owner=A, lease=LEASE, limit=100)
+    assert tickets.record_send(recorded, State.PENDING_SEND, owner=A, retransmit_after=LEASE)
+    theirs = new_ticket()
+    tickets.claim_due(owner=B, lease=LEASE, limit=100)
+
+    assert tickets.release_leases([mine, recorded, theirs], owner=A) == 1
+
+    assert claimed_ids(tickets.claim_due(owner=B, lease=LEASE, limit=100)) == {mine}
+    assert row(other_batch).locked_by == A
+    assert row(theirs).locked_by == B
+    assert state(recorded) == State.SENT
+
+
 def test_a_ticket_past_its_deadline_is_not_sent_but_left_to_the_sweeper():
     tid = new_ticket()
     force(tid, deadline_at=ago(1))

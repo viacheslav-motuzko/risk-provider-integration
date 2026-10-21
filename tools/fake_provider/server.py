@@ -16,6 +16,7 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from apps.risk_integration.protocol.close_codes import CLOSE_ALREADY_CONNECTED
 from apps.risk_integration.protocol.envelope import Envelope
 from apps.risk_integration.protocol.messages import Decision, InboundType, OutboundType
 
@@ -29,14 +30,23 @@ class TicketReply(StrEnum):
     REFUSE = "REFUSE"  # an ERROR about the TICKET
 
 
+class RejectNew(StrEnum):
+    """How a second session is refused while one is open; `None` on the knob allows several sessions."""
+
+    UPGRADE = "UPGRADE"  # HTTP 409 at the upgrade
+    CLOSE = "CLOSE"  # accepted, then closed with the already-connected code
+
+
 class FakeProvider:
     def __init__(self, *, token: str) -> None:
+        self.token = token  # the one it accepts; a test may change it
+        self.reject_new: RejectNew | None = None
         self.ticket_reply = TicketReply.ACCEPT
         self.duplicates = 1  # copies of each recommendation
         self.refuse_confirm = False
         self.refuse_cancellation = False
         self.received: list[Envelope] = []
-        self._token = token
+        self.sessions_opened = 0
         self._arrived = asyncio.Condition()
         self._connections: set[ServerConnection] = set()
         self._server: Server | None = None
@@ -67,9 +77,10 @@ class FakeProvider:
             await self._arrived.wait_for(lambda: len(self.frames(message_type, ticket_id)) >= count)
         return self.frames(message_type, ticket_id)[-1]
 
-    async def wait_for_session(self) -> None:
+    async def wait_for_session(self, *, opened: int = 1) -> None:
+        """Until a session is open and `opened` sessions have been accepted in all."""
         async with asyncio.timeout(WAIT), self._arrived:
-            await self._arrived.wait_for(lambda: bool(self._connections))
+            await self._arrived.wait_for(lambda: bool(self._connections) and self.sessions_opened >= opened)
 
     async def send(self, frame: str) -> None:
         """Send a frame to every open session: a late, unknown or malformed message."""
@@ -92,13 +103,19 @@ class FakeProvider:
         return _frame(InboundType.ERROR, ticket_id, payload)
 
     def _authorize(self, connection: ServerConnection, request: Request) -> Response | None:
-        if request.headers.get("Authorization") != f"Bearer {self._token}":
+        if request.headers.get("Authorization") != f"Bearer {self.token}":
             return connection.respond(HTTPStatus.UNAUTHORIZED, "invalid token\n")
+        if self.reject_new is RejectNew.UPGRADE and self._connections:
+            return connection.respond(HTTPStatus.CONFLICT, "already connected\n")
         return None
 
     async def _handle(self, connection: ServerConnection) -> None:
+        if self.reject_new is RejectNew.CLOSE and self._connections:
+            await connection.close(CLOSE_ALREADY_CONNECTED)
+            return
         async with self._arrived:
             self._connections.add(connection)
+            self.sessions_opened += 1
             self._arrived.notify_all()
         try:
             async for frame in connection:

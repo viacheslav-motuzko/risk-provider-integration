@@ -43,6 +43,17 @@ class IntegrationSettings(BaseSettings):
     ws_ping_timeout: Duration = timedelta(seconds=20)
     ws_close_timeout: Duration = timedelta(seconds=10)
     ws_send_timeout: Duration = timedelta(seconds=2)
+    token_timeout: Duration = timedelta(seconds=5)
+
+    # Reconnect delays by how the last session ended; each is jittered down by up to half.
+    reconnect_initial: Duration = timedelta(milliseconds=500)  # doubles per failure in a row
+    reconnect_max: Duration = timedelta(seconds=30)
+    standby_retry: Duration = timedelta(seconds=2)  # another instance holds the session: take over soon after
+    displaced_backoff: Duration = timedelta(seconds=60)
+    auth_backoff_initial: Duration = timedelta(seconds=30)  # doubles per failure in a row
+    auth_backoff_max: Duration = timedelta(minutes=5)
+    # A session open this long resets the delays; a handshake alone does not.
+    session_stable_after: Duration = timedelta(seconds=60)
 
     db_statement_timeout: Duration = timedelta(seconds=2)
     db_lock_timeout: Duration = timedelta(seconds=1)
@@ -74,6 +85,10 @@ class IntegrationSettings(BaseSettings):
             raise ValueError("RISK_PROVIDER_URL must use wss:// unless RISK_PROVIDER_ALLOW_PLAINTEXT is set")
         if self.db_await_timeout <= self.db_statement_timeout:
             raise ValueError("RISK_DB_AWAIT_TIMEOUT must exceed RISK_DB_STATEMENT_TIMEOUT")
+        if self.reconnect_max < self.reconnect_initial:
+            raise ValueError("RISK_RECONNECT_MAX must be at least RISK_RECONNECT_INITIAL")
+        if self.auth_backoff_max < self.auth_backoff_initial:
+            raise ValueError("RISK_AUTH_BACKOFF_MAX must be at least RISK_AUTH_BACKOFF_INITIAL")
         # A relay that holds a row longer than its lease lets another claim it: a duplicate send, which the
         # provider absorbs, but not one to cause on every slow send.
         if self.lease <= self.ws_send_timeout + self.db_await_timeout:

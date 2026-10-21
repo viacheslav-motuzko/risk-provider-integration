@@ -9,6 +9,7 @@ import structlog
 from apps.risk_integration.adapters.monolith import DjangoBetDecisionAdapter
 from apps.risk_integration.persistence.db import DbRunner
 from apps.risk_integration.ports import BetDecisionPort
+from apps.risk_integration.runtime.backoff import Backoff, BackoffPolicy
 from apps.risk_integration.runtime.config import IntegrationSettings
 from apps.risk_integration.runtime.connection import run_connection
 from apps.risk_integration.runtime.decisions import Decisions
@@ -86,9 +87,21 @@ class IntegrationApp:
             ping_timeout=s.ws_ping_timeout,
             close_timeout=s.ws_close_timeout,
             send_timeout=s.ws_send_timeout,
+            token_timeout=s.token_timeout,
+        )
+        backoff = Backoff(
+            BackoffPolicy(
+                retry_initial=s.reconnect_initial,
+                retry_max=s.reconnect_max,
+                standby_retry=s.standby_retry,
+                displaced=s.displaced_backoff,
+                auth_initial=s.auth_backoff_initial,
+                auth_max=s.auth_backoff_max,
+                stable_after=s.session_stable_after,
+            )
         )
         loops = {
-            "connection": lambda: run_connection(options, self._tokens, self._relay, self._queue),
+            "connection": lambda: run_connection(options, self._tokens, self._relay, self._queue, backoff),
             "sweeper": self._sweeper.run,
             **{f"applier-{n}": lambda: apply_messages(self._queue, self._decisions) for n in range(s.appliers)},
         }

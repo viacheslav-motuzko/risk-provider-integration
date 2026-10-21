@@ -29,6 +29,7 @@ class ConnectOptions:
     ping_timeout: timedelta
     close_timeout: timedelta
     send_timeout: timedelta
+    token_timeout: timedelta
 
 
 class SessionEnded(Exception):
@@ -41,7 +42,8 @@ class SessionEnded(Exception):
 
 class TokenProvider(Protocol):
     async def token(self) -> SecretStr:
-        """A token for the next connect; called before every connect."""
+        """A token for the next connect; called before every connect. Raises `SessionEnded`: `AUTH_FAILED` when
+        the credentials are refused, `TRANSIENT` when the auth endpoint cannot be reached."""
         ...
 
 
@@ -82,6 +84,14 @@ class ProviderSession:
         await self._ws.wait_closed()
         exc = self._ws.protocol.close_exc
         raise _ended(exc) from exc
+
+
+async def fetch_token(tokens: TokenProvider, *, within: timedelta) -> SecretStr:
+    try:
+        async with asyncio.timeout(within.total_seconds()):
+            return await tokens.token()
+    except TimeoutError as exc:
+        raise SessionEnded(SessionOutcome.TRANSIENT, "token fetch timed out") from exc
 
 
 @asynccontextmanager

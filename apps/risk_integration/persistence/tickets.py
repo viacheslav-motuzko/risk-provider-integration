@@ -96,6 +96,12 @@ def claim_finals_for_resend(
     return _claim(due, owner=owner, lease=lease, limit=limit)
 
 
+def release_leases(ticket_ids: Collection[UUID], *, owner: str) -> int:
+    """Clears `owner`'s leases on these tickets, for a relay whose session ended mid-batch: the next session can
+    claim them at once instead of waiting the lease out. Rows already recorded have no lease and are untouched."""
+    return RiskTicket.objects.filter(ticket_id__in=ticket_ids, locked_by=owner).update(locked_by="", locked_until=None)
+
+
 def lock_awaiting(ticket_id: UUID, *, past_deadline: bool = False) -> int | None:
     """lock a ticket that still waits for its recommendation and return its bet, or None if it
     has moved on (duplicate, late) or, with `past_deadline`, is not yet due. The lock serializes appliers and the

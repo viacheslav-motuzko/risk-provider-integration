@@ -30,6 +30,13 @@ def integration_settings(url: str, **overrides: Any) -> IntegrationSettings:
         "appliers": 2,
         "relay_poll_interval": timedelta(milliseconds=20),
         "sweeper_interval": timedelta(milliseconds=20),
+        # Short enough that a scenario sees several reconnects within its wait.
+        "reconnect_initial": timedelta(milliseconds=20),
+        "reconnect_max": timedelta(milliseconds=100),
+        "standby_retry": timedelta(milliseconds=50),
+        "displaced_backoff": timedelta(milliseconds=100),
+        "auth_backoff_initial": timedelta(milliseconds=50),
+        "auth_backoff_max": timedelta(milliseconds=100),
         **overrides,
     }
     return IntegrationSettings(**values)
@@ -52,6 +59,13 @@ class Running:
     def __init__(self, task: asyncio.Task[None]) -> None:
         self.task = task
 
+    async def stop(self) -> None:
+        """Cancels the app, which closes its session; as close to a pod going away as a test gets in-process."""
+        if not self.task.done():
+            self.task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.task
+
     async def wait[T](self, awaitable: Awaitable[T]) -> T:
         waiter = asyncio.ensure_future(awaitable)
         done, _ = await asyncio.wait({waiter, self.task}, timeout=WAIT, return_when=asyncio.FIRST_COMPLETED)
@@ -72,21 +86,20 @@ class Running:
 
 
 @asynccontextmanager
-async def running(fake: FakeProvider, *, port: BetDecisionPort = PORT, token: str = TOKEN) -> AsyncIterator[Running]:
+async def running(
+    fake: FakeProvider, *, port: BetDecisionPort = PORT, token: str = TOKEN, **overrides: Any
+) -> AsyncIterator[Running]:
     app = IntegrationApp(
-        integration_settings(fake.url),
+        integration_settings(fake.url, **overrides),
         ticket_deadline=settings.RISK_TICKET_DEADLINE,
         port=port,
         tokens=StubTokenProvider(SecretStr(token)),
     )
-    task = asyncio.create_task(app.run())
+    run = Running(asyncio.create_task(app.run()))
     try:
-        yield Running(task)
+        yield run
     finally:
-        if not task.done():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        await run.stop()
 
 
 def count(name: str, **labels: str) -> float:

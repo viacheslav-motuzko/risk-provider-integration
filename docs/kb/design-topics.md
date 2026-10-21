@@ -61,3 +61,4 @@ One line per topic: the decision, the reason, the date or stage. A topic listed 
 - Sweeper starvation: a ticket whose compensation failed is skipped in memory for 5 s, so a full batch of failing tickets cannot hold back the ones behind it (D4, stage 4a review).
 - Lease and send timeout defaults lowered to 6 s and 2 s: tickets of a crashed process wait out the lease against a 10 s deadline (D3, stage 4a review).
 - Invariant 4 reads "one top-level `TaskGroup`, with each session's loops in a nested group" (stage 4a review).
+- Releasing leases on a session change: the relay releases its current batch when its session ends, by primary key, and waits out a claim still running when it is cancelled. Rejected: release by owner at session start (needs a new index, still races with a late claim), ids in memory, outbox states only (D3, stage 4b design gate).

@@ -1,6 +1,6 @@
-"""Counters of the runtime loops. Labels are bounded enums only, never a ticket or bet id."""
+"""Metrics of the runtime loops. Labels are bounded enums only, never a ticket or bet id."""
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Gauge
 
 FRAMES_DROPPED = Counter("risk_frames_dropped_total", "Inbound frames that could not be decoded", ["kind"])
 INBOUND_IGNORED = Counter(
@@ -24,4 +24,9 @@ SENDS_NOT_RECORDED = Counter(
     "risk_sends_not_recorded_total", "Sends whose transition missed: a reply came first, or the lease was lost"
 )
 DB_ERRORS = Counter("risk_loop_db_errors_total", "Transient database errors in a loop pass", ["loop", "kind"])
-SESSIONS_ENDED = Counter("risk_sessions_ended_total", "Provider sessions that ended or were refused", ["outcome"])
+SESSIONS_ENDED = Counter(
+    "risk_sessions_ended_total",
+    "Provider sessions that ended or were refused; inbound_queue_full: the appliers had stopped the reader",
+    ["outcome", "inbound_queue_full"],
+)
+SESSION_OPEN = Gauge("risk_session_open", "1 while this process holds a provider session")

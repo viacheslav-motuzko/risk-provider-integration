@@ -2,6 +2,7 @@
 Time moves by writing `deadline_at` or `retransmit_at` into the past; nothing waits for a real deadline."""
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from datetime import timedelta
@@ -20,17 +21,16 @@ from apps.risk_integration.domain.states import AWAITING_RECOMMENDATION, CancelR
 from apps.risk_integration.persistence import tickets
 from apps.risk_integration.persistence.db import DbRunner
 from apps.risk_integration.ports import AcceptOutcome
-from apps.risk_integration.protocol.close_codes import CLOSE_PLANNED, SessionOutcome
+from apps.risk_integration.protocol.close_codes import CLOSE_PLANNED
 from apps.risk_integration.protocol.messages import Decision as WireDecision
 from apps.risk_integration.protocol.messages import OutboundType
 from apps.risk_integration.runtime.decisions import Decisions
 from apps.risk_integration.runtime.sweeper import Sweeper, SweeperSettings
 from apps.risk_integration.tests.tickets_helpers import ago, force, row, state
-from apps.risk_integration.transport.ws_client import SessionEnded
 from apps.wallets.models import HoldState
 from tests.flow_helpers import FUNDS, ODDS_OVER_LIMIT, PORT, STAKE, balance, bet_state, funded_bet, hold_state
 from tests.scenario_helpers import TOKEN, Running, count, counted, make_db_runner, running
-from tools.fake_provider.server import FakeProvider, TicketReply
+from tools.fake_provider.server import WAIT, FakeProvider, RejectNew, TicketReply
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -38,6 +38,8 @@ TICKET = OutboundType.TICKET
 CONFIRM = OutboundType.CONFIRM_RECOMMENDATION
 DECLINE = OutboundType.DECLINE_RECOMMENDATION
 CANCEL = OutboundType.REQUEST_CANCELLATION
+ENDED = "risk_sessions_ended_total"
+CLOSE_SERVER_ERROR = 1011  # a standard code: transient, reconnect with backoff
 
 
 @pytest.fixture
@@ -89,6 +91,23 @@ class FailingVoid:
     def void(self, bet_id: int) -> None:
         if bet_id == self.bet_id:
             raise self.error
+        PORT.void(bet_id)
+
+
+class StuckAccept:
+    """The real adapter, except that `accept` waits until `released`: an applier stuck on a slow monolith."""
+
+    def __init__(self) -> None:
+        self.released = threading.Event()
+
+    def accept(self, bet_id: int) -> AcceptOutcome:
+        self.released.wait(WAIT)
+        return PORT.accept(bet_id)
+
+    def decline(self, bet_id: int) -> None:
+        PORT.decline(bet_id)
+
+    def void(self, bet_id: int) -> None:
         PORT.void(bet_id)
 
 
@@ -429,23 +448,95 @@ async def test_an_unclassified_apply_failure_ends_the_process_and_moves_no_money
 # The session
 
 
-async def test_a_session_the_provider_closes_ends_the_process_with_its_outcome(db, fake):
-    async with running(fake) as app:
-        await app.wait(fake.wait_for_session())
+async def test_a_planned_close_of_a_stable_session_reconnects_at_once_and_carries_on(db, fake):
+    # Any reconnect but the immediate one would wait far past every wait in this test.
+    slow = timedelta(seconds=60)
+    stable = timedelta(milliseconds=1)
+    async with running(fake, session_stable_after=stable, reconnect_initial=slow, reconnect_max=slow) as app:
+        first = await db(funded_bet)
+        await reaches(app, db, first.ticket_id, State.CONFIRMED)
+        planned = count(ENDED, outcome="planned", inbound_queue_full="false")
+
         await fake.close_sessions(CLOSE_PLANNED)
-        with pytest.raises(ExceptionGroup) as failure:
-            await app.wait(app.task)
+        await app.wait(fake.wait_for_session(opened=2))
+        second = await db(funded_bet)
+        await reaches(app, db, second.ticket_id, State.CONFIRMED)
 
-    ended = failure.value.subgroup(SessionEnded)
-    assert ended is not None
-    assert [e.outcome for e in ended.exceptions if isinstance(e, SessionEnded)] == [SessionOutcome.PLANNED]
+    assert count(ENDED, outcome="planned", inbound_queue_full="false") == planned + 1
 
 
-async def test_a_refused_token_ends_with_auth_failed(fake):
-    async with running(fake, token="wrong") as app:
-        with pytest.raises(ExceptionGroup) as failure:
-            await app.wait(app.task)
+async def test_a_dropped_session_reconnects_and_resends_sent_tickets_and_recent_final_messages(db, fake):
+    fake.ticket_reply = TicketReply.SILENT
+    async with running(fake) as app:
+        waiting, confirmed = await db(funded_bet), await db(funded_bet)
+        await app.wait(fake.wait_for(TICKET, confirmed.ticket_id))
+        await fake.send(fake.recommendation(confirmed.ticket_id, WireDecision.ACCEPT))
+        await app.wait(fake.wait_for(CONFIRM, confirmed.ticket_id))
+        await reaches(app, db, confirmed.ticket_id, State.CONFIRMED)
+        await reaches(app, db, waiting.ticket_id, State.SENT)
 
-    ended = failure.value.subgroup(SessionEnded)
-    assert ended is not None
-    assert [e.outcome for e in ended.exceptions if isinstance(e, SessionEnded)] == [SessionOutcome.AUTH_FAILED]
+        await fake.close_sessions(CLOSE_SERVER_ERROR)
+        await app.wait(fake.wait_for(TICKET, waiting.ticket_id, count=2))
+        await app.wait(fake.wait_for(CONFIRM, confirmed.ticket_id, count=2))
+
+    assert fake.sessions_opened == 2
+    assert await db(state, waiting.ticket_id) == State.SENT
+    assert await db(state, confirmed.ticket_id) == State.CONFIRMED
+    assert await money(db, confirmed.bet_id) == (BetState.ACCEPTED, HoldState.CAPTURED, 2 * (FUNDS - STAKE))
+
+
+async def test_a_refused_token_keeps_the_process_retrying_until_the_provider_accepts_it(db, fake):
+    refused = count(ENDED, outcome="auth_failed", inbound_queue_full="false")
+    async with running(fake, token="rotated") as app:
+        await app.until(counted(ENDED, refused + 2, outcome="auth_failed", inbound_queue_full="false"))
+        assert fake.sessions_opened == 0
+
+        fake.token = "rotated"
+        bet = await db(funded_bet)
+        await reaches(app, db, bet.ticket_id, State.CONFIRMED)
+
+
+@pytest.mark.parametrize("reject", list(RejectNew))
+async def test_a_refused_second_instance_stands_by_and_takes_over_the_first_ones_sent_tickets(db, fake, reject):
+    fake.reject_new = reject
+    fake.ticket_reply = TicketReply.SILENT
+    refused = count(ENDED, outcome="already_connected", inbound_queue_full="false")
+    async with running(fake) as first:
+        bet = await db(funded_bet)
+        await first.wait(fake.wait_for(TICKET, bet.ticket_id))
+        await reaches(first, db, bet.ticket_id, State.SENT)
+
+        async with running(fake) as second:
+            await second.until(counted(ENDED, refused + 2, outcome="already_connected", inbound_queue_full="false"))
+            assert fake.sessions_opened == 1
+            fake.ticket_reply = TicketReply.ACCEPT
+
+            await first.stop()
+            await second.wait(fake.wait_for(TICKET, bet.ticket_id, count=2))
+            await reaches(second, db, bet.ticket_id, State.CONFIRMED)
+
+    assert fake.sessions_opened == 2
+    assert await money(db, bet.bet_id) == (BetState.ACCEPTED, HoldState.CAPTURED, FUNDS - STAKE)
+
+
+async def test_appliers_that_fall_behind_stop_the_reader_and_the_dropped_session_is_labelled_then_recovered(db, fake):
+    port = StuckAccept()
+    # The first copy holds the only applier; the rest fill the queue and the library's buffer, so the socket is
+    # no longer read, pongs included.
+    fake.duplicates = 40
+    backpressure = {"outcome": "transient", "inbound_queue_full": "true"}
+    dropped = count(ENDED, **backpressure)
+    # Failing the connection waits for the close handshake, which an unread socket never completes: bound it too.
+    keepalive: dict[str, Any] = {
+        "ws_ping_interval": timedelta(milliseconds=50),
+        "ws_ping_timeout": timedelta(milliseconds=200),
+        "ws_close_timeout": timedelta(milliseconds=200),
+    }
+    async with running(fake, port=port, appliers=1, inbound_queue_size=1, **keepalive) as app:
+        bet = await db(funded_bet)
+        await app.until(counted(ENDED, dropped + 1, **backpressure))
+
+        port.released.set()
+        await reaches(app, db, bet.ticket_id, State.CONFIRMED)
+
+    assert await money(db, bet.bet_id) == (BetState.ACCEPTED, HoldState.CAPTURED, FUNDS - STAKE)

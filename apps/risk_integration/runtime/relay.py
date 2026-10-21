@@ -64,19 +64,24 @@ class Relay:
 
     async def run(self, session: Sender) -> NoReturn:
         resend: deque[Claim] | None = None
-        while True:
-            try:
-                if resend is None:
-                    resend = await self._resend_owed()
-                batch = await self._next_batch(resend)
-            except TRANSIENT_DB_ERRORS as exc:
-                _count_db_error(exc)
-                await asyncio.sleep(self._settings.poll_interval.total_seconds())
-                continue
-            for claimed in batch:
-                await self._send(session, claimed)
-            if not resend and len(batch) < self._settings.batch_size:
-                await asyncio.sleep(self._settings.poll_interval.total_seconds())
+        batch: list[tickets.ClaimedTicket] = []
+        try:
+            while True:
+                try:
+                    if resend is None:
+                        resend = await self._resend_owed()
+                    batch = await self._next_batch(resend)
+                except TRANSIENT_DB_ERRORS as exc:
+                    _count_db_error(exc)
+                    await asyncio.sleep(self._settings.poll_interval.total_seconds())
+                    continue
+                for claimed in batch:
+                    await self._send(session, claimed)
+                if not resend and len(batch) < self._settings.batch_size:
+                    await asyncio.sleep(self._settings.poll_interval.total_seconds())
+        finally:
+            # Runs on a failed send and on cancellation alike, before the next session starts.
+            await self._release(batch)
 
     async def _resend_owed(self) -> deque[Claim]:
         """The re-send queries for this session. Each pages by `since`: a re-send moves `last_sent_at` past it."""
@@ -112,13 +117,28 @@ class Relay:
 
     async def _next_batch(self, resend: deque[Claim]) -> list[tickets.ClaimedTicket]:
         while resend:
-            batch = await self._run_db(resend[0])
+            batch = await self._claim(resend[0])
             if batch:
                 return batch
             resend.popleft()
-        return await self._run_db(
-            tickets.claim_due, owner=self._settings.owner, lease=self._settings.lease, limit=self._settings.batch_size
+        settings = self._settings
+        return await self._claim(
+            partial(tickets.claim_due, owner=settings.owner, lease=settings.lease, limit=settings.batch_size)
         )
+
+    async def _claim(self, claim: Claim) -> list[tickets.ClaimedTicket]:
+        # Cancelling the caller does not stop the unit of work. A claim that commits after the cancellation would
+        # hold its rows for a whole lease with nobody to send them, so it is waited out (bounded by the run_db
+        # timeout) and what it took is released.
+        claiming = asyncio.ensure_future(self._run_db(claim))
+        try:
+            return await asyncio.shield(claiming)
+        except asyncio.CancelledError:
+            try:
+                await self._release(await claiming)
+            except TRANSIENT_DB_ERRORS as exc:
+                _count_db_error(exc)
+            raise
 
     async def _send(self, session: Sender, claimed: tickets.ClaimedTicket) -> None:
         message = _message(claimed)
@@ -141,6 +161,21 @@ class Relay:
             if not recorded:
                 log.info("send_not_recorded", state=claimed.state)
                 metrics.SENDS_NOT_RECORDED.inc()
+
+    async def _release(self, batch: list[tickets.ClaimedTicket]) -> None:
+        """Frees the rest of a batch the session did not get to send, so the next session sends it at once.
+        Best effort: if this fails, the leases run out."""
+        if not batch:
+            return
+        try:
+            released = await self._run_db(
+                tickets.release_leases, [c.ticket_id for c in batch], owner=self._settings.owner
+            )
+        except TRANSIENT_DB_ERRORS as exc:
+            _count_db_error(exc)
+            return
+        if released:
+            log.info("leases_released", count=released)
 
 
 def _message(claimed: tickets.ClaimedTicket) -> OutboundMessage:

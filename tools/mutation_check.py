@@ -25,6 +25,9 @@ DECISIONS = "apps/risk_integration/runtime/decisions.py"
 INBOUND = "apps/risk_integration/runtime/inbound.py"
 SUPERVISOR = "apps/risk_integration/runtime/supervisor.py"
 SWEEPER = "apps/risk_integration/runtime/sweeper.py"
+CONNECTION = "apps/risk_integration/runtime/connection.py"
+BACKOFF = "apps/risk_integration/runtime/backoff.py"
+WS_CLIENT = "apps/risk_integration/transport/ws_client.py"
 
 TIMEOUT_S = 120
 
@@ -358,6 +361,89 @@ MUTATIONS = (
         "a transient failure of an escalation gives up at once (the provider does not repeat its error)",
         DECISIONS,
         (("if attempt >= self._escalation_attempts:", "if True:"),),
+    ),
+    Mutation(
+        "session-end-exits",
+        "a session that ends or is refused ends the process instead of reconnecting",
+        CONNECTION,
+        (("        return ended.outcome, lasted\n", "        raise\n"),),
+    ),
+    Mutation(
+        "backpressure-unlabelled",
+        "a session dropped while the inbound queue was full is not told apart",
+        CONNECTION,
+        (("queue_full=queue.full()", "queue_full=False"),),
+    ),
+    Mutation(
+        "planned-not-immediate",
+        "a planned close of a stable session waits like a transient failure",
+        BACKOFF,
+        (("            case SessionOutcome.PLANNED if stable:\n                return timedelta(0)\n", ""),),
+    ),
+    Mutation(
+        "planned-always-immediate",
+        "a planned close reconnects at once even after a session that did not last",
+        BACKOFF,
+        (("case SessionOutcome.PLANNED if stable:", "case SessionOutcome.PLANNED:"),),
+    ),
+    Mutation(
+        "displaced-immediate",
+        "a displaced session reconnects at once",
+        BACKOFF,
+        (("return self._jittered(p.displaced)", "return timedelta(0)"),),
+    ),
+    Mutation(
+        "standby-grows",
+        "a refused standby backs off further and further instead of retrying soon",
+        BACKOFF,
+        (
+            (
+                "return self._jittered(p.standby_retry)",
+                "return self._jittered(self._grown(p.standby_retry, p.retry_max))",
+            ),
+        ),
+    ),
+    Mutation(
+        "auth-short-backoff",
+        "a refused token is retried on the short transient curve",
+        BACKOFF,
+        (("self._grown(p.auth_initial, p.auth_max)", "self._grown(p.retry_initial, p.retry_max)"),),
+    ),
+    Mutation(
+        "streak-reset-at-handshake",
+        "any opened session resets the backoff, so accept-then-close loops fast",
+        BACKOFF,
+        (("stable = lasted is not None and lasted >= self._policy.stable_after", "stable = lasted is not None"),),
+    ),
+    Mutation(
+        "streak-across-outcomes",
+        "a new outcome continues the previous streak (a standby that took over drops to the cap)",
+        BACKOFF,
+        (("if stable or outcome != self._outcome:", "if stable:"),),
+    ),
+    Mutation(
+        "token-unbounded",
+        "the token fetch has no timeout",
+        WS_CLIENT,
+        (("asyncio.timeout(within.total_seconds())", "asyncio.timeout(None)"),),
+    ),
+    Mutation(
+        "leases-kept-at-session-end",
+        "a relay whose session ends keeps the leases of its unsent batch",
+        RELAY,
+        (("            await self._release(batch)\n", "            pass\n"),),
+    ),
+    Mutation(
+        "cancelled-claim-kept",
+        "a claim that commits after the relay is cancelled keeps its leases",
+        RELAY,
+        (("return await asyncio.shield(claiming)", "return await claiming"),),
+    ),
+    Mutation(
+        "release-any-owner",
+        "releasing a batch also frees leases another relay holds",
+        TICKETS,
+        (("filter(ticket_id__in=ticket_ids, locked_by=owner)", "filter(ticket_id__in=ticket_ids)"),),
     ),
 )
 

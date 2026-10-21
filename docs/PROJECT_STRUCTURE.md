@@ -59,19 +59,21 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 │       │   └── close_codes.py             AUTH_FAILED / DISPLACED / ALREADY_CONNECTED / PLANNED / TRANSIENT
 │       ├── persistence/                   [S2] the only ORM users besides models.py
 │       │   ├── tickets.py                 create_ticket, claim_due / claim_sent_for_resend / claim_finals_for_resend
-│       │   │                              (SKIP LOCKED + lease), lock_awaiting, record_* / cancel / escalate (CAS), find_expired
+│       │   │                              (SKIP LOCKED + lease), release_leases, lock_awaiting, record_* / cancel /
+│       │   │                              escalate (CAS), find_expired
 │       │   ├── errors.py                  classify_apply_failure: transient / permanent / unclassified (D4)
 │       │   └── db.py                      DbRunner (run_db): semaphore, context copy, SET LOCAL timeouts, hygiene
 │       ├── adapters/monolith.py           [S3] DjangoBetDecisionAdapter -> betting / wallets services
-│       ├── transport/ws_client.py         [S4a] one session: connect, token provider (static stub), keepalive,
-│       │                                  library exceptions -> SessionEnded(outcome)
+│       ├── transport/ws_client.py         [S4a] one session: connect, token provider (static stub) fetched with a
+│       │                                  timeout, keepalive, library exceptions -> SessionEnded(outcome)
 │       ├── runtime/                       [S4a] async; never touches the ORM directly
 │       │   ├── app.py                     composition root (manual wiring)
 │       │   ├── config.py                  RISK_* settings (pydantic-settings)
 │       │   ├── supervisor.py              TaskGroup, fail-fast, a returning loop is a failure
-│       │   ├── connection.py              the session group: reader, relay, socket watch [S4b: reconnect, backoff]
+│       │   ├── connection.py              [S4b] reconnect loop around the session group (reader, relay, socket watch)
+│       │   ├── backoff.py                 [S4b] reconnect delay per session outcome, streak, jitter
 │       │   ├── relay.py                   outbox sender (the only sender on the socket), retransmission, re-send
-│       │   │                              at the start of every session
+│       │   │                              at the start of every session, release of its batch when it ends
 │       │   ├── inbound.py                 reader -> bounded queue -> N appliers
 │       │   ├── decisions.py               use cases through run_db: failure classes, logs, counters
 │       │   ├── sweeper.py                 deadlines -> compensation + CANCEL_PENDING
@@ -84,7 +86,8 @@ Legend: `[scaffold]` created by the user up front; `[S1]`..`[S6]` filled in that
 ├── tests/                                 [S3] tests across the monolith and the integration (outside both
 │                                          packages, so the import contracts stay strict); [S4a] runtime scenarios
 ├── tools/fake_provider/                   [S4a] NOT production code, in-process from pytest: server.py (knobs are
-│                                          attributes, so no scenarios.py) [S5: __main__.py for compose]
+│                                          attributes, so no scenarios.py; [S4b] reject-new, token)
+│                                          [S5: __main__.py for compose]
 ├── conftest.py                            [S4a] hides ambient RISK_* variables (make exports .env) from every test
 ├── deploy/k8s/                            [S5] OPS: deployment.yaml only (replicas 1, probes, resources, grace period, rollout)
 │
