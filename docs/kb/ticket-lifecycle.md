@@ -1,6 +1,6 @@
 # Ticket lifecycle
 
-The transition table is implemented in `domain/machine.py`, which adds one self-loop trigger, `FINAL_RESENT`, for the re-send of a final message after a reconnect. Decision IDs refer to `DECISIONS.md`, assumption IDs to `docs/PROVIDER_QUESTIONS.md`.
+The transition table is implemented in `domain/machine.py`, which adds one self-loop trigger, `FINAL_RESENT`, for the re-send of a final message after a reconnect. Decision IDs refer to `decisions.md`, assumption IDs to `docs/PROVIDER_QUESTIONS.md`.
 
 ```
 PENDING_SEND -> SENT -> CONFIRM_PENDING -> CONFIRMED

@@ -14,7 +14,7 @@ from apps.risk_integration import services
 from apps.risk_integration.domain.machine import CANCEL_REASONS, ESCALATION_REASONS, Trigger
 from apps.risk_integration.domain.states import Decision
 from apps.risk_integration.persistence import tickets
-from apps.risk_integration.persistence.db import DbRunner
+from apps.risk_integration.persistence.db import DbRunner, OutcomeUnknown
 from apps.risk_integration.persistence.errors import (
     TRANSIENT_DB_ERRORS,
     ApplyFailure,
@@ -101,7 +101,6 @@ class Decisions:
             if escalated is None:
                 return
             if not escalated:
-                # After an unknown outcome this miss may be our own earlier attempt that committed.
                 log.info("provider_error_ignored", trigger=trigger, reason="late", error_code=error_code)
                 metrics.INBOUND_IGNORED.labels(message="ERROR", reason="late").inc()
                 return
@@ -112,12 +111,17 @@ class Decisions:
     async def _escalate_with_retries(self, ticket_id: UUID, trigger: Trigger, error_code: str) -> bool | None:
         """The transition's result, or None when every attempt failed. Retried in place, unlike every other use
         case: the provider does not repeat an error, so nothing else would bring this one back. Safe to repeat,
-        because the transition is conditional."""
+        because the transition is conditional. A miss after an unknown outcome is checked against the ticket: it
+        may be our own earlier attempt that committed, and that is an escalation, not a late error."""
         attempt = 1
+        outcome_unknown = False
         while True:
             try:
                 escalated: bool = await self._run_db(tickets.escalate, ticket_id, trigger, error_code=error_code)
+                if not escalated and outcome_unknown:
+                    escalated = await self._run_db(tickets.is_escalated, ticket_id, trigger, error_code=error_code)
             except TRANSIENT_DB_ERRORS as exc:
+                outcome_unknown = outcome_unknown or isinstance(exc, OutcomeUnknown)
                 kind = transient_kind(exc)
                 if attempt >= self._escalation_attempts:
                     # Lost unless a re-send after a reconnect draws the same error again.

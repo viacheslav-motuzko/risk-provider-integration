@@ -19,7 +19,7 @@ from apps.risk_integration.domain.errors import PermanentApplyError
 from apps.risk_integration.domain.machine import Trigger
 from apps.risk_integration.domain.states import AWAITING_RECOMMENDATION, CancelReason, Decision, EscalationReason, State
 from apps.risk_integration.persistence import tickets
-from apps.risk_integration.persistence.db import DbRunner
+from apps.risk_integration.persistence.db import DbRunner, OutcomeUnknown
 from apps.risk_integration.ports import AcceptOutcome
 from apps.risk_integration.protocol.close_codes import CLOSE_PLANNED
 from apps.risk_integration.protocol.messages import Decision as WireDecision
@@ -125,6 +125,22 @@ class FlakyRunDb:
             self.failures -= 1
             raise OperationalError("connection lost")
         return await self.run_db(fn, *args, **kwargs)
+
+
+class CommitsUnseen:
+    """The real runner, except that the first call of `fn` commits and then reports `OutcomeUnknown`."""
+
+    def __init__(self, run_db: DbRunner, fn: Callable[..., Any]) -> None:
+        self.run_db = run_db
+        self.fn = fn
+        self.pending = True
+
+    async def __call__(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        result = await self.run_db(fn, *args, **kwargs)
+        if fn is self.fn and self.pending:
+            self.pending = False
+            raise OutcomeUnknown(fn.__name__)
+        return result
 
 
 async def reaches(app: Running, db: DbRunner, ticket_id: UUID, expected: State) -> None:
@@ -386,6 +402,22 @@ async def test_a_refusal_whose_escalation_fails_transiently_is_retried_and_escal
 
     assert await db(state, bet.ticket_id) == State.ESCALATED
     assert count("risk_escalations_total", reason="CONFIRM_REJECTED") == escalations + 1
+
+
+async def test_an_escalation_that_committed_unseen_is_counted_as_an_escalation_not_as_a_late_error(db):
+    bet = await db(funded_bet)
+    await db(force, bet.ticket_id, state=State.CONFIRMED)
+    unseen = CommitsUnseen(db, tickets.escalate)
+    decisions = Decisions(cast(DbRunner, unseen), PORT, escalation_retry_delay=timedelta(milliseconds=10))
+    escalations = count("risk_escalations_total", reason="CONFIRM_REJECTED")
+    late = count("risk_inbound_ignored_total", message="ERROR", reason="late")
+
+    await decisions.escalate(bet.ticket_id, Trigger.CONFIRM_REFUSED, error_code="CONFIRM_TOO_LATE")
+
+    assert not unseen.pending
+    assert await db(state, bet.ticket_id) == State.ESCALATED
+    assert count("risk_escalations_total", reason="CONFIRM_REJECTED") == escalations + 1
+    assert count("risk_inbound_ignored_total", message="ERROR", reason="late") == late
 
 
 async def test_an_escalation_that_keeps_failing_gives_up_after_its_attempts_and_is_counted(db):

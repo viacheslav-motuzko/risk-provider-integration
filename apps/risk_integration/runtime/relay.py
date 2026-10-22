@@ -6,6 +6,9 @@ Every session starts by re-sending what the previous session may have lost: `TIC
 previous session ended. Only then does the relay poll the outbox.
 
 A draining process stops the relay and calls `flush` once: the final messages owed go out, a `TICKET` does not.
+
+A row the relay cannot encode or record is contained to that row: logged, counted, and left under its lease, so it
+comes back once per lease and keeps alerting until a person fixes it, while every other row keeps flowing.
 """
 
 import asyncio
@@ -21,7 +24,7 @@ from structlog.contextvars import bound_contextvars
 
 from apps.risk_integration.domain.states import CLOSED_FINAL, State
 from apps.risk_integration.persistence import tickets
-from apps.risk_integration.persistence.db import DbRunner
+from apps.risk_integration.persistence.db import DbRunner, OutcomeUnknown
 from apps.risk_integration.persistence.errors import TRANSIENT_DB_ERRORS, transient_kind
 from apps.risk_integration.protocol.codec import encode
 from apps.risk_integration.protocol.messages import (
@@ -38,7 +41,7 @@ from apps.risk_integration.runtime.health import Heartbeat
 
 log = structlog.get_logger(__name__)
 
-type Claim = Callable[[], list[tickets.ClaimedTicket]]
+type Claim = Callable[..., list[tickets.ClaimedTicket]]
 
 # A re-send carries the same message as the first send; only the metric tells them apart.
 _RESENT = frozenset({State.SENT}) | CLOSED_FINAL
@@ -65,6 +68,7 @@ class Relay:
         self._run_db = run_db
         self._settings = settings
         self._heartbeat = heartbeat
+        self._reclaim_own = False
 
     async def run(self, session: Sender) -> NoReturn:
         resend: deque[Claim] | None = None
@@ -157,20 +161,30 @@ class Relay:
         # Cancelling the caller does not stop the unit of work. A claim that commits after the cancellation would
         # hold its rows for a whole lease with nobody to send them, so it is waited out (bounded by the run_db
         # timeout) and what it took is released.
-        claiming = asyncio.ensure_future(self._run_db(claim))
+        claiming = asyncio.ensure_future(self._run_db(claim, reclaim_own=self._reclaim_own))
         try:
-            return await asyncio.shield(claiming)
+            batch = await asyncio.shield(claiming)
+        except OutcomeUnknown:
+            self._reclaim_own = True
+            raise
         except asyncio.CancelledError:
             try:
                 await self._release(await claiming)
             except TRANSIENT_DB_ERRORS as exc:
                 _count_db_error(exc)
             raise
+        self._reclaim_own = False
+        return batch
 
     async def _send(self, session: Sender, claimed: tickets.ClaimedTicket) -> None:
-        message = _message(claimed)
         with bound_contextvars(ticket_id=str(claimed.ticket_id), bet_id=claimed.bet_id):
-            await session.send(encode(message, ts=datetime.now(UTC)))
+            try:
+                message = _message(claimed)
+                frame = encode(message, ts=datetime.now(UTC))
+            except Exception:
+                _count_unexpected(stage="encode", state=claimed.state)
+                return
+            await session.send(frame)
             attempt = "resend" if claimed.state in _RESENT else "first"
             metrics.MESSAGES_SENT.labels(type=message.message_type, attempt=attempt).inc()
             try:
@@ -184,6 +198,9 @@ class Relay:
             except TRANSIENT_DB_ERRORS as exc:
                 # The lease runs out and the message goes again; the provider deduplicates.
                 _count_db_error(exc)
+                return
+            except Exception:
+                _count_unexpected(stage="record", state=claimed.state)
                 return
             if not recorded:
                 log.debug("send_not_recorded", state=claimed.state)
@@ -226,6 +243,11 @@ def _message(claimed: tickets.ClaimedTicket) -> OutboundMessage:
         case State.CANCEL_PENDING | State.CANCELLED if claimed.cancel_reason is not None:
             return RequestCancellation(ticket_id=ticket_id, reason=CancellationReason(claimed.cancel_reason.value))
     raise ValueError(f"nothing to send in state {claimed.state}")
+
+
+def _count_unexpected(*, stage: str, state: State) -> None:
+    log.exception("unexpected_error", loop="relay", stage=stage, state=state)
+    metrics.UNEXPECTED_ERRORS.labels(loop="relay").inc()
 
 
 def _count_db_error(exc: Exception) -> None:

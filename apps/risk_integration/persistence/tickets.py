@@ -84,26 +84,29 @@ def create_ticket(*, bet_id: int, snapshot: TicketSnapshot, deadline: timedelta)
     return ticket.ticket_id
 
 
-def claim_due(*, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
+def claim_due(*, owner: str, lease: timedelta, limit: int, reclaim_own: bool = False) -> list[ClaimedTicket]:
     """The relay's normal pass: every message owed (OUTBOX) and SENT tickets at their retransmit point."""
     owed = Q(state__in=FINAL_PENDING) | _before_deadline(State.PENDING_SEND)
     retransmit = _before_deadline(State.SENT) & Q(retransmit_at__lte=Now())
-    return _claim(owed | retransmit, owner=owner, lease=lease, limit=limit)
+    return _claim(owed | retransmit, owner=owner, lease=lease, limit=limit, reclaim_own=reclaim_own)
 
 
-def claim_final_pending(*, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
+def claim_final_pending(*, owner: str, lease: timedelta, limit: int, reclaim_own: bool = False) -> list[ClaimedTicket]:
     """A draining relay's flush: final messages owed, never a `TICKET`."""
-    return _claim(Q(state__in=FINAL_PENDING), owner=owner, lease=lease, limit=limit)
+    return _claim(Q(state__in=FINAL_PENDING), owner=owner, lease=lease, limit=limit, reclaim_own=reclaim_own)
 
 
-def claim_sent_for_resend(*, owner: str, lease: timedelta, limit: int, since: datetime) -> list[ClaimedTicket]:
+def claim_sent_for_resend(
+    *, owner: str, lease: timedelta, limit: int, since: datetime, reclaim_own: bool = False
+) -> list[ClaimedTicket]:
     """After a (re)connect at DB time `since`: SENT tickets not yet re-sent on this session.
     A re-send moves `last_sent_at` past `since`, so calling this until it returns nothing pages through all."""
-    return _claim(_before_deadline(State.SENT) & Q(last_sent_at__lt=since), owner=owner, lease=lease, limit=limit)
+    due = _before_deadline(State.SENT) & Q(last_sent_at__lt=since)
+    return _claim(due, owner=owner, lease=lease, limit=limit, reclaim_own=reclaim_own)
 
 
 def claim_finals_for_resend(
-    *, owner: str, lease: timedelta, limit: int, window_start: datetime, since: datetime
+    *, owner: str, lease: timedelta, limit: int, window_start: datetime, since: datetime, reclaim_own: bool = False
 ) -> list[ClaimedTicket]:
     """After a (re)connect at DB time `since`: final messages sent in `[window_start, since)`, whatever their
     type, and not yet re-sent `FINAL_RESENDS_MAX` times. Pages like `claim_sent_for_resend`."""
@@ -113,7 +116,7 @@ def claim_finals_for_resend(
         last_sent_at__gte=window_start,
         last_sent_at__lt=since,
     )
-    return _claim(due, owner=owner, lease=lease, limit=limit)
+    return _claim(due, owner=owner, lease=lease, limit=limit, reclaim_own=reclaim_own)
 
 
 def release_leases(ticket_ids: Collection[UUID], *, owner: str) -> int:
@@ -185,6 +188,16 @@ def escalate(ticket_id: UUID, trigger: Trigger, *, error_code: str) -> bool:
     )
 
 
+def is_escalated(ticket_id: UUID, trigger: Trigger, *, error_code: str) -> bool:
+    """Whether `escalate` with these arguments has committed: a read for a caller that did not learn the outcome."""
+    return RiskTicket.objects.filter(
+        ticket_id=ticket_id,
+        state=State.ESCALATED,
+        escalation_reason=ESCALATION_REASONS[trigger],
+        last_error_code=error_code,
+    ).exists()
+
+
 def find_expired(*, limit: int, exclude: Collection[UUID] = ()) -> list[UUID]:
     """Tickets still waiting for a recommendation at their deadline, for the sweeper, oldest first."""
     due = Q(state__in=AWAITING_RECOMMENDATION, deadline_at__lte=Now())
@@ -210,11 +223,12 @@ def db_now() -> datetime:
     return now
 
 
-def _claim(due: Q, *, owner: str, lease: timedelta, limit: int) -> list[ClaimedTicket]:
+def _claim(due: Q, *, owner: str, lease: timedelta, limit: int, reclaim_own: bool) -> list[ClaimedTicket]:
+    """`reclaim_own` also takes rows under `owner`'s own lease: rows that a claim of its own, which it stopped
+    waiting for, committed after all."""
+    free = (_lease_free() | Q(locked_by=owner)) if reclaim_own else _lease_free()
     # No FIFO guarantee with SKIP LOCKED; the order is best-effort and nothing depends on it.
-    rows = list(
-        RiskTicket.objects.select_for_update(skip_locked=True).filter(due, _lease_free()).order_by("created_at")[:limit]
-    )
+    rows = list(RiskTicket.objects.select_for_update(skip_locked=True).filter(due, free).order_by("created_at")[:limit])
     if rows:
         RiskTicket.objects.filter(ticket_id__in=[r.ticket_id for r in rows]).update(
             locked_by=owner, locked_until=_db_now_plus(lease)

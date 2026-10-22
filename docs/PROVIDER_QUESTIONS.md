@@ -8,7 +8,7 @@ Each entry has:
 - **Why it matters**: what goes wrong if we guess wrong.
 - **If different**: what changes in the code. Wire-format guesses live only in `apps/risk_integration/protocol/` (the anti-corruption layer), so most corrections stay in that package.
 
-Code does not carry these IDs: where an assumption matters, the code states it in words, and provider guesses are marked `# ASSUMPTION:`. Environment assumptions (E-xx) are questions to our own tech lead, not to a counterpart (section 7). Decision IDs (D1-D13) refer to `docs/kb/DECISIONS.md`.
+Code does not carry these IDs: where an assumption matters, the code states it in words, and provider guesses are marked `# ASSUMPTION:`. Environment assumptions (E-xx) are questions to our own tech lead, not to a counterpart (section 7). Decision IDs (D1-D13) refer to `docs/kb/decisions.md`.
 
 ## 1. Provider: correctness of the ticket flow
 
@@ -55,7 +55,7 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 ### A-04. Response times and windows
 - **Q**: How quickly do you usually answer a ticket, and what is the maximum? Does it differ by ticket type, sport, live versus pre-match, or stake? How long after your recommendation do you accept our confirm or decline?
 - **Assumed**: One ticket type, because the task defines none. The recommendation usually arrives within about 2 s and at most within about 5 s. Our deadline is one configured value (default 10 s), stored per ticket as `deadline_at` when the ticket is created. The retransmit point is half the deadline. A confirm or decline is accepted within 10 s after the recommendation.
-- **Why it matters**: The deadline is how long a customer waits before the bet is rejected (B-02). The confirm window decides whether a confirm lost in a disconnect is still recovered by the re-send after the reconnect (D11); a re-send that comes too late ends in `ESCALATED` (B-01).
+- **Why it matters**: The deadline is how long a customer waits before the bet is rejected (B-02). The confirm window decides whether a confirm lost in a disconnect is still recovered by the re-send after the reconnect (D11); a re-send that comes too late ends in `ESCALATED` (B-01). With the assumed keepalive (A-06: ping 20 s, timeout 20 s) a silently dropped connection is noticed up to about 40 s later, past a 10 s confirm window, so the re-send recovers a confirm only when the drop is noticed at once (a reset or a close frame). A keepalive under the window (a few seconds) would cover silent drops too, at the cost of false drops whenever the reader stalls.
 - **If different**: Per-type timing means `deadline_at` is computed from the type when the ticket is created. The column already exists per ticket, so only the computation changes. A shorter confirm window means more lost confirms end in `ESCALATED` instead of being recovered.
 
 ## 3. Provider: sessions and connectivity
@@ -65,6 +65,12 @@ These answers decide whether a bet can be lost, accepted twice, or left with exp
 - **Assumed**: One active session per account. A second connection is refused (reject-new), with a distinguishable status or close code (A-17). A dead session is dropped after missed pings, in about 30 s.
 - **Why it matters**: It decides how a rolling update hands over the session, and whether more than one replica can run. Correctness does not depend on it: claims, compare-and-swap transitions and A-03 make parallel instances safe (D3, D6).
 - **If different**: If the newer connection displaces the old one (kick-out), one replica still works: the new pod displaces the terminating old one. More than one replica would make pods displace each other in a loop. In that case we would add the documented leader lease row (D6). If several sessions are allowed, every instance is active, which is safe under A-15.
+
+### A-18. Taking over our own dead session
+- **Q**: When our process dies without closing its session, can a new connection with the same credentials take that session over at once (for example with a session identifier or a "replace" flag), instead of being refused until you drop the dead one?
+- **Assumed**: No. Every pod is refused (A-05) until the dead session is dropped, about 30 s after the crash.
+- **Why it matters**: During those 30 s no pod can send. Every bet placed in that time, and every bet in flight at the crash, passes its 10 s deadline and is voided and cancelled. A crash of the session holder therefore costs about 30 s of rejected bets. A planned shutdown closes the session and does not have this cost.
+- **If different**: A takeover would cut the gap to the reconnect delay. It needs a session identifier stored in the database (the only state shared across pods) and sent on connect, and the close code for "displaced" would then mean a newer instance of ours took over.
 
 ### A-06. Liveness
 - **Q**: Do you use WebSocket ping/pong, an application-level heartbeat, or both? What interval and timeout?
@@ -159,6 +165,11 @@ These are not provider facts. They decide what happens to a customer's bet or mo
 - **Q**: How long are ticket rows kept? Do regulatory retention rules for bet records apply to them?
 - **Default**: Kept as long as the bet records. Archiving or partitioning is a next step.
 - **If different**: Partition by creation month. The partial indexes on non-terminal states keep the hot queries fast in any case.
+
+### B-05. A cancellation requested by the monolith
+- **Q**: A step of bet placement outside the integration can fail after the ticket exists. Must the monolith be able to cancel the bet on the provider side? Before the provider's recommendation, and also after we accepted the bet and captured the stake? Who refunds the customer in the second case?
+- **Default**: Not built. Today only the integration cancels: at the deadline, when applying the recommendation fails, or when the provider refuses the `TICKET`. Before acceptance, a monolith-side cancellation would be the same compensation with a reason of its own. After acceptance the bet stays, and the mismatch goes to manual resolution, as in B-01.
+- **If different**: Before acceptance: `api.request_cancellation(bet_id)`, a new trigger from the waiting states to `CANCEL_PENDING` and a new cancellation reason on the wire (a provider assumption). After acceptance: a refund path from an accepted state, which the wallet stub does not have, and a customer notification.
 
 ## 7. Environment (E-xx): questions to the tech lead
 

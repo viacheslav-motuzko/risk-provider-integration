@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 from collections.abc import Callable, Iterator
+from contextlib import suppress
 from datetime import timedelta
 from enum import StrEnum
 from typing import Any, cast
@@ -9,7 +10,8 @@ from typing import Any, cast
 import pytest
 from django.conf import settings as django_settings
 from django.core.management import CommandError, call_command
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from prometheus_client import REGISTRY
 from pydantic import SecretStr, ValidationError
 from structlog.testing import capture_logs
 
@@ -18,7 +20,7 @@ from apps.risk_integration.domain.machine import Trigger
 from apps.risk_integration.domain.states import State
 from apps.risk_integration.management.commands import run_risk_provider
 from apps.risk_integration.persistence import tickets
-from apps.risk_integration.persistence.db import DbRunner
+from apps.risk_integration.persistence.db import DbRunner, OutcomeUnknown
 from apps.risk_integration.protocol import messages
 from apps.risk_integration.protocol.close_codes import SessionOutcome
 from apps.risk_integration.runtime.config import IntegrationSettings
@@ -26,7 +28,7 @@ from apps.risk_integration.runtime.health import Heartbeat, Heartbeats
 from apps.risk_integration.runtime.relay import Relay, RelaySettings
 from apps.risk_integration.runtime.shutdown import Shutdown
 from apps.risk_integration.runtime.supervisor import LoopReturned, supervise
-from apps.risk_integration.tests.tickets_helpers import new_ticket, row, state
+from apps.risk_integration.tests.tickets_helpers import force, new_ticket, row, state
 from apps.risk_integration.transport.ws_client import SessionEnded, fetch_token
 
 WAIT = 5
@@ -130,6 +132,22 @@ class _ClaimHeldBack:
         return await self.run_db(held_back)
 
 
+class _ClaimCommitsUnseen:
+    """The real runner, except that the first `claim_due` commits and then reports `OutcomeUnknown`, as a claim
+    that outlived the caller's wait does."""
+
+    def __init__(self, run_db: DbRunner) -> None:
+        self.run_db = run_db
+        self.pending = True
+
+    async def __call__(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        result = await self.run_db(fn, *args, **kwargs)
+        if getattr(fn, "func", None) is tickets.claim_due and result and self.pending:
+            self.pending = False
+            raise OutcomeUnknown("claim_due")
+        return result
+
+
 @pytest.fixture
 def run_db() -> Iterator[DbRunner]:
     runner = DbRunner(
@@ -204,6 +222,67 @@ class TestRelay:
 
         rows = [await run_db(row, tid) for tid in ids]
         assert [(r.state, r.locked_by) for r in rows] == [(State.PENDING_SEND, "")] * 2
+
+    async def test_rows_a_timed_out_claim_leased_after_all_are_sent_without_waiting_out_the_lease(self, run_db):
+        ids = [await run_db(new_ticket) for _ in range(2)]
+        task = asyncio.create_task(make_relay(cast(DbRunner, _ClaimCommitsUnseen(run_db))).run(_RecordingSession()))
+        try:
+            # The test lease (10 s) outlasts WAIT: only a re-claim of the relay's own leases sends these in time.
+            for tid in ids:
+                await _until(task, run_db, tid, State.SENT)
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def test_a_row_the_relay_cannot_encode_is_left_under_its_lease_and_the_others_still_go(self, run_db):
+        poison = await run_db(new_ticket)
+        await run_db(tickets.record_decline, poison)
+        await run_db(force, poison, decline_reason="MANUAL_REVIEW")  # a hand-edited row the wire enum lacks
+        good = await run_db(new_ticket)
+
+        await self._assert_contained(run_db, poison, good, State.DECLINE_PENDING)
+
+    async def test_a_row_whose_send_cannot_be_recorded_is_left_under_its_lease_and_the_others_still_go(
+        self, run_db, monkeypatch
+    ):
+        poison, good = await run_db(new_ticket), await run_db(new_ticket)
+        record_send = tickets.record_send
+
+        def fails_for_poison(ticket_id: Any, *args: Any, **kwargs: Any) -> bool:
+            if ticket_id == poison:
+                raise IntegrityError("constraint violated")
+            return record_send(ticket_id, *args, **kwargs)
+
+        monkeypatch.setattr(tickets, "record_send", fails_for_poison)
+
+        await self._assert_contained(run_db, poison, good, State.PENDING_SEND)
+
+    async def _assert_contained(self, run_db: DbRunner, poison: Any, good: Any, poison_state: State) -> None:
+        errors = _count("risk_unexpected_errors_total", loop="relay")
+        task = asyncio.create_task(make_relay(run_db).run(_RecordingSession()))
+        try:
+            await _until(task, run_db, good, State.SENT)
+            assert not task.done()
+            poisoned = await run_db(row, poison)
+            assert (poisoned.state, poisoned.locked_by) == (poison_state, "relay-a")
+            assert _count("risk_unexpected_errors_total", loop="relay") == errors + 1
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+async def _until(task: asyncio.Task[Any], run_db: DbRunner, ticket_id: Any, expected: State) -> None:
+    async with asyncio.timeout(WAIT):
+        while await run_db(state, ticket_id) != expected:
+            if task.done():
+                await task
+            await asyncio.sleep(0.01)
+
+
+def _count(name: str, **labels: str) -> float:
+    return REGISTRY.get_sample_value(name, labels) or 0.0
 
 
 class _RecordingSession:

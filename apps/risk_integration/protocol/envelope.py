@@ -8,7 +8,7 @@ class Envelope(BaseModel):
     """ASSUMPTION: every frame in both directions is `{type, ticket_id, ts, payload}` as a JSON text frame.
 
     `ticket_id` is optional: an `ERROR` about a frame without a ticket has none (ASSUMPTION).
-    `ts` is the sender's clock, used for logs and latency metrics only, never in a decision: clocks may differ.
+    `ts` is the sender's clock. We set it on every frame we send and never read the provider's: clocks may differ.
     Unknown top-level fields are ignored so the provider can extend the envelope without breaking us.
     """
 
