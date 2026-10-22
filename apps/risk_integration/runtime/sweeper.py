@@ -50,12 +50,20 @@ class Sweeper:
                 metrics.DB_ERRORS.labels(loop="sweeper", kind=kind).inc()
                 expired = []
             for ticket_id in expired:
-                if not await self._decisions.compensate(ticket_id, Trigger.DEADLINE_PASSED):
+                if not await self._compensate(ticket_id):
                     self._failed_until[ticket_id] = self._now() + self._settings.retry_failed_after.total_seconds()
                 self._heartbeat.beat()
             # Always pause: a full batch of tickets whose compensation keeps failing would otherwise spin.
             self._heartbeat.beat(extra=self._settings.interval)
             await asyncio.sleep(self._settings.interval.total_seconds())
+
+    async def _compensate(self, ticket_id: UUID) -> bool:
+        try:
+            return await self._decisions.compensate(ticket_id, Trigger.DEADLINE_PASSED)
+        except Exception:
+            log.exception("unexpected_error", loop="sweeper", ticket_id=str(ticket_id))
+            metrics.UNEXPECTED_ERRORS.labels(loop="sweeper").inc()
+            return False
 
     def _recently_failed(self) -> list[UUID]:
         """Tickets whose compensation failed lately, left out of the next batches so that a batch full of them

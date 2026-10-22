@@ -194,7 +194,7 @@ class TestApplyFailureClassification:
         assert classify_apply_failure(OutcomeUnknown("apply")) is ApplyFailure.TRANSIENT
         assert classify_apply_failure(NotAdmitted("apply")) is ApplyFailure.TRANSIENT
 
-    def test_bugs_stay_unclassified_so_the_process_fails_fast(self):
+    def test_bugs_stay_unclassified_so_no_cancellation_hides_them(self):
         with pytest.raises(ProgrammingError) as programming, transaction.atomic():
             _sql("SELECT * FROM no_such_table")
         assert classify_apply_failure(programming.value) is None

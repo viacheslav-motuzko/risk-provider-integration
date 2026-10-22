@@ -314,6 +314,23 @@ async def test_a_ticket_whose_compensation_keeps_failing_does_not_hold_back_the_
     assert await money(db, stuck.bet_id) == (BetState.PENDING_RISK, HoldState.HELD, 2 * FUNDS - STAKE)
 
 
+async def test_a_bug_in_one_tickets_compensation_is_contained_and_retried_and_the_next_expired_one_cancelled(db, fake):
+    fake.ticket_reply = TicketReply.SILENT
+    stuck, behind = await db(funded_bet), await db(funded_bet)
+    await db(force, stuck.ticket_id, deadline_at=ago(2))
+    await db(force, behind.ticket_id, deadline_at=ago(1))
+    port = FailingVoid(stuck.bet_id, RuntimeError("a bug"))
+    unexpected = count("risk_unexpected_errors_total", loop="sweeper")
+    # A batch of one is full of the oldest expired ticket, the one whose compensation hits the bug.
+    retry = timedelta(milliseconds=100)
+    async with running(fake, port=port, sweeper_batch_size=1, sweeper_retry_failed_after=retry) as app:
+        await reaches(app, db, behind.ticket_id, State.CANCELLED)
+        await app.until(counted("risk_unexpected_errors_total", unexpected + 2, loop="sweeper"))
+
+    assert await db(state, stuck.ticket_id) in AWAITING_RECOMMENDATION
+    assert await money(db, stuck.bet_id) == (BetState.PENDING_RISK, HoldState.HELD, 2 * FUNDS - STAKE)
+
+
 # Provider errors
 
 
@@ -435,16 +452,28 @@ async def test_a_permanent_apply_failure_compensates_and_cancels(db, fake):
     assert await money(db, bet.bet_id) == (BetState.VOIDED, HoldState.RELEASED, FUNDS)
 
 
-async def test_an_unclassified_apply_failure_ends_the_process_and_moves_no_money(db, fake):
+async def test_an_unclassified_apply_failure_is_contained_to_its_ticket_which_is_cancelled_at_the_deadline(db, fake):
     port = FailingAccept(RuntimeError("a bug"))
+    unexpected = count("risk_unexpected_errors_total", loop="applier")
     async with running(fake, port=port) as app:
-        bet = await db(funded_bet)
-        with pytest.raises(ExceptionGroup) as failure:
-            await app.wait(app.task)
+        bad = await db(funded_bet)
+        await app.until(counted("risk_unexpected_errors_total", unexpected + 1, loop="applier"))
+        assert await db(state, bad.ticket_id) in AWAITING_RECOMMENDATION  # whether the relay's commit got in or not
+        assert await money(db, bad.bet_id) == (BetState.PENDING_RISK, HoldState.HELD, FUNDS - STAKE)
 
-    assert failure.group_contains(RuntimeError, match="a bug")
-    assert await db(state, bet.ticket_id) in AWAITING_RECOMMENDATION  # whether the relay's commit got in or not
-    assert await money(db, bet.bet_id) == (BetState.PENDING_RISK, HoldState.HELD, FUNDS - STAKE)
+        await db(force, bad.ticket_id, deadline_at=ago(1))
+        cancellation = await app.wait(fake.wait_for(CANCEL, bad.ticket_id))
+        await reaches(app, db, bad.ticket_id, State.CANCELLED)
+
+        port.times = 0
+        good = await db(funded_bet)
+        await reaches(app, db, good.ticket_id, State.CONFIRMED)
+
+    assert cancellation.payload == {"reason": "DEADLINE_EXCEEDED"}
+    assert fake.frames(CONFIRM, bad.ticket_id) == []
+    # Two fundings; the bad bet's stake was released, the good one's captured.
+    assert await money(db, bad.bet_id) == (BetState.VOIDED, HoldState.RELEASED, 2 * FUNDS - STAKE)
+    assert await money(db, good.bet_id) == (BetState.ACCEPTED, HoldState.CAPTURED, 2 * FUNDS - STAKE)
 
 
 # The session

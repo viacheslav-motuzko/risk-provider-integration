@@ -54,6 +54,14 @@ async def apply_messages(queue: InboundQueue, decisions: Decisions, heartbeat: H
                     await decisions.apply(recommendation.ticket_id, Decision(recommendation.decision.value))
                 case ProviderError() as error:
                     await _on_provider_error(error, decisions)
+        except Exception:
+            log.exception(
+                "unexpected_error",
+                loop="applier",
+                message_type=message.message_type,
+                ticket_id=str(message.ticket_id) if message.ticket_id else None,
+            )
+            metrics.UNEXPECTED_ERRORS.labels(loop="applier").inc()
         finally:
             queue.task_done()
 

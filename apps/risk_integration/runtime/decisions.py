@@ -1,7 +1,7 @@
 """The use cases as the loops call them: each is one `run_db` unit, its failure is classified, logged and counted.
 A transient failure leaves the ticket as it is, for the retransmission or the deadline; an unclassified one is a
-bug and propagates, so the process exits. The one exception is an escalation, retried a few times: nothing brings
-a provider error back."""
+bug and propagates to the loop, which contains it to that one message or ticket. The one exception is an
+escalation, retried a few times: nothing brings a provider error back."""
 
 import asyncio
 from datetime import timedelta

@@ -45,7 +45,7 @@ class RiskTicket(models.Model):
     deadline_at = models.DateTimeField()
     retransmit_at = models.DateTimeField(null=True)
     last_sent_at = models.DateTimeField(null=True)
-    final_resends = models.PositiveSmallIntegerField(default=0)
+    final_resends = models.PositiveSmallIntegerField(default=0, db_default=0)
 
     locked_by = models.CharField(max_length=64, default="")
     locked_until = models.DateTimeField(null=True)
