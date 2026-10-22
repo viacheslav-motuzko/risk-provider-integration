@@ -221,6 +221,7 @@ __marimo__/
 
 # private agent context
 CLAUDE.local.md
+.claude/settings.local.json
 docs/kb/private/
 
 # local-only prompts

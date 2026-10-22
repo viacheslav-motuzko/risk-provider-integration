@@ -2,23 +2,19 @@
 
 Integration with a WebSocket risk-management provider for sports betting, built as a separate process (a Django management command) inside a Django monolith with a synchronous ORM.
 
-Private context lives in `CLAUDE.local.md` and `docs/kb/private/`. Those files are gitignored. Never copy their content into committed files.
-
 ## What good means
 
-- The work is reviewed by engineers and discussed afterwards, so every decision must be defensible: trade-offs, failure modes (restart, duplicates, late messages, partial failure), explicit handling of ambiguity, production-readiness. Volume of code or documentation does not count.
+- Every decision is defensible: trade-offs, failure modes (restart, duplicates, late messages, partial failure), explicit handling of ambiguity, production-readiness. Volume of code or documentation does not count.
 - Prefer a smaller system with tested invariants over a broad one shown on the happy path. Stub what is not essential and say so.
 
 ## Working on this repository
 
-- Decisions live in `docs/kb/DECISIONS.md` (D1-D13: context, decision, alternatives, consequences). A change that materializes a decision updates its entry in the same diff. There are no separate ADR files.
+- Decisions live in `docs/kb/decisions.md` (D1-D13: context, decision, alternatives, consequences). A change that materializes a decision updates its entry in the same diff. There are no separate ADR files.
 - The fixed invariants below are not changed silently. If you think one is wrong, say so before changing code.
-- The provider cannot be asked. Write the question and the most probable answer yourself in `docs/PROVIDER_QUESTIONS.md` (provider A-xx, business B-xx) and mark the code `# ASSUMPTION:`. Ask the user about everything else.
+- Behaviour the specification leaves open is an assumption: the question and the most probable answer go to `docs/PROVIDER_QUESTIONS.md` (provider A-xx, business B-xx, environment E-xx), and the code relying on a provider guess is marked `# ASSUMPTION:`.
 - A new invariant comes with a test that fails when the invariant is broken; check it by breaking the code once.
-- Keep a diff reviewable (about 600 lines of non-test code at most). `make check` passes before you report a change as done.
-- **Review before commit.** Changes stay uncommitted in the working tree until the user has reviewed the full diff. Never stage or commit on your own; commit only on an explicit instruction. Never merge, rebase, reset or push.
 
-## Fixed invariants (rationale: `docs/kb/DECISIONS.md`, D1-D12)
+## Fixed invariants (rationale: `docs/kb/decisions.md`, D1-D12)
 
 1. The DB is the source of truth. Decide, commit, then send. The ticket table is the outbox. Nothing that matters after a restart lives only in memory.
 2. `TICKET` is at-least-once: retransmit once before the deadline and after every reconnect. Final messages have no ack (A-02): sent once, re-sent after a reconnect if sent within the loss window, whatever their type (D11). Correctness comes from provider-side idempotency by `ticket_id` (A-03) and compare-and-swap transitions on our side.
@@ -44,17 +40,15 @@ Private context lives in `CLAUDE.local.md` and `docs/kb/private/`. Those files a
 - Dependencies are pinned in `uv.lock`. Add none without stating why.
 - Stay inside the scope of the change. A stub is named `Stub*` or clearly marked and logged at startup. No TODOs in code. No dead code.
 - Path-scoped rules in `.claude/rules/` load automatically when you edit matching files.
-- The repository may be public. Never put the private context into committed files.
 
 ## Documentation (read when)
 
 | File | Read when |
 |------|-----------|
-| `docs/kb/DECISIONS.md` | Before changing behaviour in the area a decision covers (D1-D13) |
+| `docs/kb/decisions.md` | Before changing behaviour in the area a decision covers (D1-D13) |
 | `docs/PROVIDER_QUESTIONS.md` | When you add or rely on a provider or business assumption (A-xx, B-xx) or an environment assumption (E-xx) |
-| `docs/kb/TICKET_LIFECYCLE.md` | Before touching states, transitions, the relay or the sweeper |
-| `docs/kb/GOTCHAS.md` | Before touching persistence, runtime or ops code |
-| `docs/kb/PROJECT_STRUCTURE.md` | When you add a module |
+| `docs/kb/ticket-lifecycle.md` | Before touching states, transitions, the relay or the sweeper |
+| `docs/kb/gotchas.md` | Before touching persistence, runtime or ops code |
 
 ## Commands
 

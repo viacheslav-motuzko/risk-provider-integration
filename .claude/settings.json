@@ -4,23 +4,10 @@
       "Bash(make *)",
       "Bash(uv run *)",
       "Bash(uv sync *)",
-      "Bash(docker compose *)",
-      "Bash(git status *)",
-      "Bash(git diff *)",
-      "Bash(git log *)",
-      "Bash(git add *)",
-      "Bash(git commit *)",
-      "Bash(git switch -c *)",
-      "Bash(git branch *)",
-      "Bash(git check-ignore *)"
+      "Bash(docker compose *)"
     ],
     "deny": [
-      "Read(./.env)",
-      "Bash(git push *)",
-      "Bash(git merge *)",
-      "Bash(git rebase *)",
-      "Bash(git reset *)",
-      "Bash(git branch -D *)"
+      "Read(./.env)"
     ]
   },
   "hooks": {
